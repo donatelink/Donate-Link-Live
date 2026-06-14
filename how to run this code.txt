@@ -1,0 +1,4 @@
+cd "D:\My Blogs Work\FYP\DonateLink-FYP1"
+  npm install
+  npm run dev
+  → open http://localhost:3000 (no Vercel link involved).
