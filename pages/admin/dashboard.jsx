@@ -1,4 +1,5 @@
 import Head from "next/head";
+import Pagination, { usePaged } from "@/components/Pagination";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
@@ -558,6 +559,7 @@ function OverviewView({ ngos, donations, ngoStats, pendingCount, totalVolume, ap
 
 /* ---------- NGO Approvals ---------- */
 function ApprovalsView({ ngos, actingId, approve, reject, ngoLink, copyLink, copiedId }) {
+  const paged = usePaged(ngos);
   if (ngos.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center text-sm text-zinc-500">
@@ -567,7 +569,7 @@ function ApprovalsView({ ngos, actingId, approve, reject, ngoLink, copyLink, cop
   }
   return (
     <div className="space-y-3">
-      {ngos.map((ngo) => (
+      {paged.pageItems.map((ngo) => (
         <div key={ngo.id} className="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -630,6 +632,7 @@ function ApprovalsView({ ngos, actingId, approve, reject, ngoLink, copyLink, cop
           )}
         </div>
       ))}
+      <Pagination paged={paged} className="px-0 sm:px-0" />
     </div>
   );
 }
@@ -643,6 +646,8 @@ function DonationsView({ donations, requests, onAdvance }) {
       .map((r) => ({ ...r, _kind: "beneficiary" })),
   ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
+  const paged = usePaged(rows);
+
   if (rows.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center text-sm text-zinc-500">
@@ -654,7 +659,7 @@ function DonationsView({ donations, requests, onAdvance }) {
     <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
       {/* Mobile cards */}
       <ul className="divide-y divide-zinc-100 md:hidden">
-        {rows.map((r) => {
+        {paged.pageItems.map((r) => {
           const isBen = r._kind === "beneficiary";
           const personName = isBen ? r.beneficiary_name : r.donor_name;
           return (
@@ -711,7 +716,7 @@ function DonationsView({ donations, requests, onAdvance }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => {
+            {paged.pageItems.map((r) => {
               const isBen = r._kind === "beneficiary";
               const personName = isBen ? r.beneficiary_name : r.donor_name;
               return (
@@ -752,12 +757,14 @@ function DonationsView({ donations, requests, onAdvance }) {
           </tbody>
         </table>
       </div>
+      <Pagination paged={paged} className="border-t border-zinc-100" />
     </div>
   );
 }
 
 /* ---------- NGOs ---------- */
 function NgosView({ ngoStats, ngoLink, actingId, setStatus, softDelete }) {
+  const paged = usePaged(ngoStats);
   if (ngoStats.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center text-sm text-zinc-500">
@@ -767,7 +774,7 @@ function NgosView({ ngoStats, ngoLink, actingId, setStatus, softDelete }) {
   }
   return (
     <div className="space-y-3">
-      {ngoStats.map((n) => (
+      {paged.pageItems.map((n) => (
         <div key={n.id} className="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -855,12 +862,14 @@ function NgosView({ ngoStats, ngoLink, actingId, setStatus, softDelete }) {
           )}
         </div>
       ))}
+      <Pagination paged={paged} className="px-0 sm:px-0" />
     </div>
   );
 }
 
 /* ---------- Donors ---------- */
 function DonorsView({ donors }) {
+  const paged = usePaged(donors);
   if (donors.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center text-sm text-zinc-500">
@@ -872,7 +881,7 @@ function DonorsView({ donors }) {
     <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
       {/* Mobile cards */}
       <ul className="divide-y divide-zinc-100 md:hidden">
-        {donors.map((d, i) => (
+        {paged.pageItems.map((d, i) => (
           <li key={i} className="flex items-center justify-between px-4 py-4">
             <div className="min-w-0">
               <div className="font-semibold text-zinc-900">{d.name}</div>
@@ -898,7 +907,7 @@ function DonorsView({ donors }) {
             </tr>
           </thead>
           <tbody>
-            {donors.map((d, i) => (
+            {paged.pageItems.map((d, i) => (
               <tr key={i} className="border-t border-zinc-100">
                 <td className="px-5 py-4 font-medium text-zinc-900">{d.name}</td>
                 <td className="px-5 py-4 text-zinc-600">{d.email}</td>
@@ -909,12 +918,14 @@ function DonorsView({ donors }) {
           </tbody>
         </table>
       </div>
+      <Pagination paged={paged} className="border-t border-zinc-100" />
     </div>
   );
 }
 
 /* ---------- Beneficiaries ---------- */
 function BeneficiariesView({ beneficiaries }) {
+  const paged = usePaged(beneficiaries);
   if (beneficiaries.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center text-sm text-zinc-500">
@@ -925,7 +936,7 @@ function BeneficiariesView({ beneficiaries }) {
   return (
     <div className="overflow-hidden rounded-2xl border border-zinc-200 bg-white">
       <ul className="divide-y divide-zinc-100 md:hidden">
-        {beneficiaries.map((b, i) => (
+        {paged.pageItems.map((b, i) => (
           <li key={i} className="flex items-center justify-between px-4 py-4">
             <div className="min-w-0">
               <div className="font-semibold text-zinc-900">{b.name}</div>
@@ -950,7 +961,7 @@ function BeneficiariesView({ beneficiaries }) {
             </tr>
           </thead>
           <tbody>
-            {beneficiaries.map((b, i) => (
+            {paged.pageItems.map((b, i) => (
               <tr key={i} className="border-t border-zinc-100">
                 <td className="px-5 py-4 font-medium text-zinc-900">{b.name}</td>
                 <td className="px-5 py-4 text-zinc-600">{b.email}</td>
@@ -963,12 +974,14 @@ function BeneficiariesView({ beneficiaries }) {
           </tbody>
         </table>
       </div>
+      <Pagination paged={paged} className="border-t border-zinc-100" />
     </div>
   );
 }
 
 /* ---------- Beneficiary Requests ---------- */
 function RequestsView({ requests }) {
+  const paged = usePaged(requests);
   if (requests.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center text-sm text-zinc-500">
@@ -978,7 +991,7 @@ function RequestsView({ requests }) {
   }
   return (
     <div className="space-y-3">
-      {requests.map((r) => (
+      {paged.pageItems.map((r) => (
         <div key={r.id} className="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -1006,12 +1019,14 @@ function RequestsView({ requests }) {
           </div>
         </div>
       ))}
+      <Pagination paged={paged} className="px-0 sm:px-0" />
     </div>
   );
 }
 
 /* ---------- Feedback ---------- */
 function FeedbackView({ feedback }) {
+  const paged = usePaged(feedback);
   if (feedback.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-4 py-10 text-center text-sm text-zinc-500">
@@ -1021,7 +1036,7 @@ function FeedbackView({ feedback }) {
   }
   return (
     <div className="space-y-3">
-      {feedback.map((f) => (
+      {paged.pageItems.map((f) => (
         <div key={f.id} className="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5">
           <div className="flex flex-wrap items-center gap-2">
             <span
@@ -1043,6 +1058,7 @@ function FeedbackView({ feedback }) {
           </div>
         </div>
       ))}
+      <Pagination paged={paged} className="px-0 sm:px-0" />
     </div>
   );
 }

@@ -8,6 +8,7 @@ import RequestFundingModal from "@/components/RequestFundingModal";
 import ReviewsModal from "@/components/ReviewsModal";
 import StarRating from "@/components/StarRating";
 import supabase from "@/utils/supabase";
+import Pagination, { usePaged } from "@/components/Pagination";
 
 const STATUS_LABEL = {
   pending: "Pending review",
@@ -184,6 +185,8 @@ export default function BeneficiaryDashboard() {
     : submittedThisMonth
     ? "You've already submitted a request this month."
     : null;
+  const ngoPaged = usePaged(sortedNgos);
+  const reqPaged = usePaged(requests);
 
   return (
     <>
@@ -306,8 +309,9 @@ export default function BeneficiaryDashboard() {
                     No verified NGOs available yet. Check back soon.
                   </div>
                 ) : (
+<>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    {sortedNgos.map((ngo) => {
+                    {ngoPaged.pageItems.map((ngo) => {
                       const avg = avgFor(ngo.id);
                       const cnt = countFor(ngo.id);
                       const mine = myFor(ngo.id);
@@ -368,6 +372,8 @@ export default function BeneficiaryDashboard() {
                       );
                     })}
                   </div>
+<Pagination paged={ngoPaged} className="mt-2 px-0 sm:px-0" />
+</>
                 )}
               </div>
 
@@ -377,7 +383,7 @@ export default function BeneficiaryDashboard() {
                     <h2 className="text-base font-semibold text-zinc-900">Your Requests</h2>
                   </div>
                   <ul className="divide-y divide-zinc-100">
-                    {requests.map((r) => (
+                    {reqPaged.pageItems.map((r) => (
                       <li key={r.id} className="px-4 py-4 sm:px-5">
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -405,6 +411,7 @@ export default function BeneficiaryDashboard() {
                       </li>
                     ))}
                   </ul>
+                  <Pagination paged={reqPaged} className="border-t border-zinc-100" />
                 </div>
               )}
             </>

@@ -4,6 +4,7 @@ import { useRouter } from "next/router";
 import { useEffect, useMemo, useState } from "react";
 import ExpenseModal, { DeliverModal, computePools } from "@/components/ExpenseModal";
 import StageAdvanceModal from "@/components/StageAdvanceModal";
+import Pagination, { usePaged } from "@/components/Pagination";
 import supabase from "@/utils/supabase";
 
 const STAGE_LABELS = ["Pending", "Confirmed", "Allocated", "Transferred", "Completed"];
@@ -70,6 +71,7 @@ const MENU = [
   { id: "donations", label: "Donations", icon: "💸" },
   { id: "requests", label: "Beneficiary Requests", icon: "🤝" },
   { id: "spending", label: "Spending", icon: "🧾" },
+  { id: "payments", label: "Payment Methods", icon: "💳" },
 ];
 
 export default function NgoDashboard() {
@@ -84,6 +86,12 @@ export default function NgoDashboard() {
   const [advanceRec, setAdvanceRec] = useState(null);
   const [advanceKind, setAdvanceKind] = useState("donation");
   const [view, setView] = useState("donations");
+
+  // Stripe onboarding returns to ?view=payments — open that tab directly.
+  useEffect(() => {
+    const v = router.query.view;
+    if (typeof v === "string" && MENU.some((m) => m.id === v)) setView(v);
+  }, [router.query.view]);
   const [expenses, setExpenses] = useState([]);
   const [expenseOpen, setExpenseOpen] = useState(false);
   const [payRequest, setPayRequest] = useState(null);
@@ -412,6 +420,10 @@ export default function NgoDashboard() {
               <RequestsView ngo={ngo} requests={requests} profiles={profiles} reload={loadRequests} />
             )}
 
+            {!loading && ngo && view === "payments" && (
+              <PaymentMethodsView ngo={ngo} onSaved={(row) => setNgo(row)} />
+            )}
+
             {!loading && ngo && view === "spending" && (
               <SpendingView
                 pools={pools}
@@ -486,6 +498,7 @@ function DonationsView({
       .filter((r) => r.status === "verified" || r.status === "funded")
       .map((r) => ({ ...r, _kind: "beneficiary" })),
   ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  const rowsPaged = usePaged(rows);
 
   const payoutCount = rows.filter((r) => r._kind === "beneficiary").length;
   const payoutCommitted = rows
@@ -542,8 +555,9 @@ function DonationsView({
             a payout.
           </div>
         ) : (
+<>
           <ul className="divide-y divide-zinc-100">
-            {rows.map((r) => {
+            {rowsPaged.pageItems.map((r) => {
               const isBen = r._kind === "beneficiary";
               const personName = isBen ? r.beneficiary_name : r.donor_name;
               const personEmail = isBen ? r.beneficiary_email : r.donor_email;
@@ -609,6 +623,8 @@ function DonationsView({
               );
             })}
           </ul>
+<Pagination paged={rowsPaged} className="border-t border-zinc-100" />
+</>
         )}
       </div>
     </>
@@ -617,6 +633,7 @@ function DonationsView({
 
 /* ---------- Beneficiary Requests view ---------- */
 function RequestsView({ requests, profiles = {}, reload }) {
+  const reqPaged = usePaged(requests);
   const [actingId, setActingId] = useState(null);
   const [rejectId, setRejectId] = useState(null);
   const [rejectNote, setRejectNote] = useState("");
@@ -671,7 +688,7 @@ function RequestsView({ requests, profiles = {}, reload }) {
         </div>
       )}
 
-      {requests.map((r) => {
+      {reqPaged.pageItems.map((r) => {
         const p = profiles[r.beneficiary_id];
         return (
         <div key={r.id} className="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5">
@@ -781,6 +798,8 @@ function RequestsView({ requests, profiles = {}, reload }) {
         );
       })}
 
+      <Pagination paged={reqPaged} className="px-0 sm:px-0" />
+
       {rejectId && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-8"
@@ -847,6 +866,7 @@ function StatCard({ label, value, accent }) {
 function SpendingView({ pools, expenses, requests, onRecord, onDeliver }) {
   const reqName = Object.fromEntries(requests.map((r) => [r.id, r.beneficiary_name]));
   const available = pools.reduce((sum, p) => sum + p.available, 0);
+  const expPaged = usePaged(expenses);
 
   return (
     <div className="mt-6 space-y-6">
@@ -907,8 +927,9 @@ function SpendingView({ pools, expenses, requests, onRecord, onDeliver }) {
         {expenses.length === 0 ? (
           <p className="px-5 py-10 text-center text-sm text-zinc-500">Nothing recorded yet.</p>
         ) : (
+<>
           <ul className="divide-y divide-zinc-200">
-            {expenses.map((e) => (
+            {expPaged.pageItems.map((e) => (
               <li key={e.id} className="flex flex-wrap items-start justify-between gap-3 px-4 py-4 sm:px-5">
                 <div className="min-w-0">
                   <div className="font-semibold text-zinc-900">{e.title}</div>
@@ -949,8 +970,190 @@ function SpendingView({ pools, expenses, requests, onRecord, onDeliver }) {
               </li>
             ))}
           </ul>
+<Pagination paged={expPaged} className="border-t border-zinc-100" />
+</>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ---------- Payment methods (how the NGO collects donations) ---------- */
+async function authHeader() {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  return { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` };
+}
+
+function PaymentMethodsView({ ngo, onSaved }) {
+  const [stripeInfo, setStripeInfo] = useState({
+    connected: !!ngo.stripe_account_id,
+    chargesEnabled: !!ngo.stripe_charges_enabled,
+  });
+  const [stripeBusy, setStripeBusy] = useState(false);
+  const [wallet, setWallet] = useState(ngo.wallet_address || "");
+  const [walletSaving, setWalletSaving] = useState(false);
+  const [okMsg, setOkMsg] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
+
+  async function callStripe(action) {
+    const res = await fetch("/api/stripe/connect", {
+      method: "POST",
+      headers: await authHeader(),
+      body: JSON.stringify({ action }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || "Stripe request failed");
+    return body;
+  }
+
+  // Re-check with Stripe on open, so finishing onboarding shows up right away.
+  useEffect(() => {
+    if (!ngo.stripe_account_id) return;
+    callStripe("status")
+      .then((info) => setStripeInfo(info))
+      .catch((err) => setErrorMsg(err.message));
+  }, [ngo.stripe_account_id]);
+
+  async function connectStripe() {
+    setStripeBusy(true);
+    setErrorMsg("");
+    try {
+      const { url } = await callStripe("onboard");
+      window.location.assign(url);
+    } catch (err) {
+      setErrorMsg(err.message);
+      setStripeBusy(false);
+    }
+  }
+
+  async function saveWallet() {
+    setOkMsg("");
+    setErrorMsg("");
+    const value = wallet.trim();
+    if (value && !/^0x[a-fA-F0-9]{40}$/.test(value)) {
+      setErrorMsg("Wallet address must be 0x followed by 40 hexadecimal characters.");
+      return;
+    }
+    setWalletSaving(true);
+    const { data, error } = await supabase
+      .from("ngos")
+      .update({ wallet_address: value || null })
+      .eq("id", ngo.id)
+      .select()
+      .single();
+    setWalletSaving(false);
+    if (error) {
+      setErrorMsg(error.message);
+      return;
+    }
+    onSaved(data);
+    setOkMsg(value ? "Wallet saved." : "Wallet removed.");
+  }
+
+  const walletOn = !!ngo.wallet_address;
+  const cardOn = stripeInfo.chargesEnabled;
+
+  return (
+    <div className="mt-6 max-w-3xl space-y-4">
+      <p className="text-sm text-zinc-600">
+        Donors can pay you in two ways. Both send money straight to you — DonateLink never holds the
+        funds.
+      </p>
+
+      {okMsg && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          {okMsg}
+        </div>
+      )}
+      {errorMsg && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {errorMsg}
+        </div>
+      )}
+
+      <section className="rounded-2xl border border-zinc-200 bg-white p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-zinc-900">💳 Card (Stripe)</h2>
+            <p className="mt-1 text-sm text-zinc-600">
+              Visa / Mastercard. Paid into your own Stripe account; Stripe&apos;s card fee (2.9% +
+              $0.30) is deducted from your share.
+            </p>
+          </div>
+          <span
+            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+              cardOn ? "bg-emerald-100 text-emerald-700" : "bg-zinc-100 text-zinc-600"
+            }`}
+          >
+            {cardOn ? "✓ Accepting cards" : stripeInfo.connected ? "Setup not finished" : "Not connected"}
+          </span>
+        </div>
+        {!cardOn && (
+          <button
+            onClick={connectStripe}
+            disabled={stripeBusy}
+            className="mt-4 rounded-lg bg-zinc-900 px-4 py-2 text-sm font-semibold text-white hover:enabled:bg-zinc-700 disabled:opacity-60"
+          >
+            {stripeBusy ? "Opening Stripe…" : stripeInfo.connected ? "Finish Stripe setup" : "Connect Stripe"}
+          </button>
+        )}
+        <p className="mt-3 text-xs text-zinc-500">
+          Setup happens on Stripe&apos;s secure page. In test mode use Stripe&apos;s test data — no real
+          documents.
+        </p>
+      </section>
+
+      <section className="rounded-2xl border border-zinc-200 bg-white p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-zinc-900">⛓️ Polygon (crypto)</h2>
+            <p className="mt-1 text-sm text-zinc-600">
+              Donors pay from MetaMask; the smart contract records the donation on-chain and sends 100%
+              to this wallet. No platform fee.
+            </p>
+          </div>
+          <span
+            className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+              walletOn ? "bg-emerald-100 text-emerald-700" : "bg-zinc-100 text-zinc-600"
+            }`}
+          >
+            {walletOn ? "✓ Accepting POL" : "No wallet"}
+          </span>
+        </div>
+        <label htmlFor="pm_wallet" className="mt-4 block text-sm font-medium text-zinc-700">
+          Payout wallet address
+        </label>
+        <div className="mt-1 flex flex-wrap gap-2">
+          <input
+            id="pm_wallet"
+            type="text"
+            value={wallet}
+            onChange={(e) => setWallet(e.target.value)}
+            placeholder="0x0000000000000000000000000000000000000000"
+            spellCheck={false}
+            className="min-w-0 flex-1 rounded-lg border border-zinc-300 px-3 py-2 font-mono text-sm text-black focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+          />
+          <button
+            onClick={saveWallet}
+            disabled={walletSaving}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:enabled:bg-emerald-700 disabled:opacity-60"
+          >
+            {walletSaving ? "Saving…" : "Save wallet"}
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-zinc-500">
+          <strong>Double-check it:</strong> crypto sent to a wrong address cannot be recovered.
+          Network: Polygon Amoy (testnet).
+        </p>
+      </section>
+
+      {!cardOn && !walletOn && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Donors cannot pay you yet. Connect Stripe or add a wallet to start receiving donations.
+        </p>
+      )}
     </div>
   );
 }

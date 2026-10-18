@@ -67,8 +67,8 @@ export default async function handler(req, res) {
         use_case: {
           type: "account_onboarding",
           account_onboarding: {
-            refresh_url: `${origin}/ngo/settings?stripe=refresh`,
-            return_url: `${origin}/ngo/settings?stripe=return`,
+            refresh_url: `${origin}/ngo/dashboard?view=payments`,
+            return_url: `${origin}/ngo/dashboard?view=payments`,
           },
         },
       });

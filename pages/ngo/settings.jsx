@@ -22,7 +22,6 @@ export default function NgoSettings() {
     website: "",
     contact_person: "",
     phone: "",
-    wallet_address: "",
   });
   const [logoUrl, setLogoUrl] = useState("");
   const [file, setFile] = useState(null);
@@ -31,8 +30,6 @@ export default function NgoSettings() {
   const [saving, setSaving] = useState(false);
   const [okMsg, setOkMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
-  const [stripeInfo, setStripeInfo] = useState({ connected: false, chargesEnabled: false });
-  const [stripeBusy, setStripeBusy] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -64,16 +61,8 @@ export default function NgoSettings() {
           website: ngoRow.website || "",
           contact_person: ngoRow.contact_person || "",
           phone: ngoRow.phone || "",
-          wallet_address: ngoRow.wallet_address || "",
         });
         setLogoUrl(ngoRow.logo_url || "");
-        setStripeInfo({
-          connected: !!ngoRow.stripe_account_id,
-          chargesEnabled: !!ngoRow.stripe_charges_enabled,
-        });
-        // Re-check with Stripe whenever an account exists, so finishing
-        // onboarding (and coming back here) is reflected right away.
-        if (ngoRow.stripe_account_id) refreshStripe(session.access_token);
       }
       setLoading(false);
     })();
@@ -81,44 +70,6 @@ export default function NgoSettings() {
       active = false;
     };
   }, [router]);
-
-  async function callStripe(action, token) {
-    if (!token) {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      token = session?.access_token;
-    }
-    const res = await fetch("/api/stripe/connect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ action }),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || "Stripe request failed");
-    return body;
-  }
-
-  async function refreshStripe(token) {
-    try {
-      const info = await callStripe("status", token);
-      setStripeInfo(info);
-    } catch (err) {
-      setErrorMsg(err.message);
-    }
-  }
-
-  async function connectStripe() {
-    setStripeBusy(true);
-    setErrorMsg("");
-    try {
-      const { url } = await callStripe("onboard");
-      window.location.assign(url);
-    } catch (err) {
-      setErrorMsg(err.message);
-      setStripeBusy(false);
-    }
-  }
 
   function update(key, value) {
     setForm((p) => ({ ...p, [key]: value }));
@@ -135,13 +86,6 @@ export default function NgoSettings() {
     if (!ngo) return;
     setOkMsg("");
     setErrorMsg("");
-
-    // Catch a malformed wallet here rather than letting the DB constraint reject it.
-    const wallet = form.wallet_address.trim();
-    if (wallet && !/^0x[a-fA-F0-9]{40}$/.test(wallet)) {
-      setErrorMsg("Wallet address must be 0x followed by 40 hexadecimal characters.");
-      return;
-    }
 
     setSaving(true);
 
@@ -170,7 +114,6 @@ export default function NgoSettings() {
         contact_person: form.contact_person.trim(),
         phone: form.phone.trim(),
         logo_url: newLogoUrl || null,
-        wallet_address: wallet || null,
       })
       .eq("id", ngo.id);
     if (ngoErr) {
@@ -235,6 +178,11 @@ export default function NgoSettings() {
           <h1 className="text-xl font-bold text-zinc-900 sm:text-2xl">NGO Settings</h1>
           <p className="mt-1 text-sm text-zinc-600">
             Update your organization profile. Changes show on donor + beneficiary NGO cards.
+            Card and crypto payouts are under{" "}
+            <Link href="/ngo/dashboard?view=payments" className="font-semibold text-emerald-700 underline">
+              Payment Methods
+            </Link>
+            .
           </p>
 
           {loading && <p className="mt-6 text-sm text-zinc-500">Loading…</p>}
@@ -376,62 +324,6 @@ export default function NgoSettings() {
                     placeholder="https://example.org"
                     className={inputClass}
                   />
-                </div>
-
-                <div>
-                  <label htmlFor="wallet_address" className="block text-sm font-medium text-zinc-700">
-                    Payout wallet address{" "}
-                    <span className="text-zinc-400">(for on-chain donations)</span>
-                  </label>
-                  <input
-                    id="wallet_address"
-                    type="text"
-                    value={form.wallet_address}
-                    onChange={(e) => update("wallet_address", e.target.value)}
-                    placeholder="0x0000000000000000000000000000000000000000"
-                    spellCheck={false}
-                    className={`${inputClass} font-mono text-sm`}
-                  />
-                  <p className="mt-1 text-xs text-zinc-500">
-                    Donations paid on Polygon are sent straight to this wallet — DonateLink never
-                    holds the funds. Leave blank to accept card donations only.{" "}
-                    <strong>Double-check it:</strong> crypto sent to a wrong address cannot be
-                    recovered.
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-zinc-700">
-                    Card payouts <span className="text-zinc-400">(Stripe)</span>
-                  </label>
-                  <div className="mt-1 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-300 px-3 py-2.5">
-                    <span className="text-sm text-zinc-700">
-                      {stripeInfo.chargesEnabled
-                        ? "✓ Connected — accepting card donations"
-                        : stripeInfo.connected
-                          ? "Setup not finished"
-                          : "Not connected"}
-                    </span>
-                    {!stripeInfo.chargesEnabled && (
-                      <button
-                        type="button"
-                        onClick={connectStripe}
-                        disabled={stripeBusy}
-                        className="rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-white hover:enabled:bg-zinc-700 disabled:opacity-60"
-                      >
-                        {stripeBusy
-                          ? "Opening Stripe…"
-                          : stripeInfo.connected
-                            ? "Finish Stripe setup"
-                            : "Connect Stripe"}
-                      </button>
-                    )}
-                  </div>
-                  <p className="mt-1 text-xs text-zinc-500">
-                    Card donations are paid straight into your own Stripe account — DonateLink never
-                    holds the funds. Setup happens on Stripe&apos;s secure page; in test mode use
-                    Stripe&apos;s test data, no real documents.
-                  </p>
                 </div>
 
                 <div>

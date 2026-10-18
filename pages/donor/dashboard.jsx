@@ -4,6 +4,7 @@ import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import Avatar from "@/components/Avatar";
 import DonationModal from "@/components/DonationModal";
+import Pagination, { usePaged } from "@/components/Pagination";
 import RatingModal from "@/components/RatingModal";
 import ReviewsModal from "@/components/ReviewsModal";
 import StarRating from "@/components/StarRating";
@@ -148,6 +149,8 @@ export default function DonorDashboard() {
     if (diff !== 0) return diff;
     return (a.org_name || "").localeCompare(b.org_name || "");
   });
+  const ngoPaged = usePaged(sortedNgos);
+  const donPaged = usePaged(donations);
 
   return (
     <>
@@ -247,8 +250,9 @@ export default function DonorDashboard() {
                     No verified NGOs available yet. Check back soon.
                   </div>
                 ) : (
+<>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    {sortedNgos.map((ngo) => {
+                    {ngoPaged.pageItems.map((ngo) => {
                       const avg = avgFor(ngo.id);
                       const cnt = countFor(ngo.id);
                       const mine = myFor(ngo.id);
@@ -307,6 +311,8 @@ export default function DonorDashboard() {
                       );
                     })}
                   </div>
+<Pagination paged={ngoPaged} className="mt-2 px-0 sm:px-0" />
+</>
                 )}
               </div>
 
@@ -324,7 +330,7 @@ export default function DonorDashboard() {
                   <>
                     {/* Mobile: card list */}
                     <ul className="divide-y divide-zinc-100 md:hidden">
-                      {donations.map((d) => (
+                      {donPaged.pageItems.map((d) => (
                         <li key={d.id} className="px-4 py-4">
                           <div className="flex items-start justify-between gap-3">
                             <div>
@@ -364,7 +370,7 @@ export default function DonorDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          {donations.map((d) => (
+                          {donPaged.pageItems.map((d) => (
                             <tr key={d.id} className="border-t border-zinc-100">
                               <td className="px-5 py-4 font-medium text-zinc-900">{d.ngo_name}</td>
                               <td className="px-5 py-4 text-zinc-600">{d.donation_type}</td>
@@ -386,6 +392,7 @@ export default function DonorDashboard() {
                         </tbody>
                       </table>
                     </div>
+                    <Pagination paged={donPaged} className="border-t border-zinc-100" />
                   </>
                 )}
               </div>
