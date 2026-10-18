@@ -10,8 +10,9 @@ function money(n) {
 
 // Mirrors the eligibility rule in supabase/cause_pools.sql: a donation joins its
 // cause pool once it is paid and confirmed (Stage 2+), unless it was advanced by
-// hand before pools existed.
-export function computePools(donations) {
+// hand before pools existed. Campaign donations form their own ring-fenced pool.
+export function computePools(donations, campaigns = []) {
+  const titles = Object.fromEntries(campaigns.map((c) => [c.id, c.title]));
   const pools = {};
   for (const d of donations) {
     const paid =
@@ -19,7 +20,16 @@ export function computePools(donations) {
       (d.onchain_status == null || d.onchain_status === "confirmed");
     if (d.stage < 2 || d.manual_stages || !paid) continue;
     const net = Number(d.net_amount ?? d.amount);
-    const p = (pools[d.donation_type] ||= { cause: d.donation_type, received: 0, spent: 0, count: 0 });
+    const key = d.campaign_id ? `c:${d.campaign_id}` : `p:${d.donation_type}`;
+    const p = (pools[key] ||= {
+      key,
+      cause: d.donation_type,
+      campaignId: d.campaign_id || null,
+      label: d.campaign_id ? `📣 ${titles[d.campaign_id] || "Campaign"}` : d.donation_type,
+      received: 0,
+      spent: 0,
+      count: 0,
+    });
     p.received += net;
     p.spent += Number(d.allocated_amount || 0);
     p.count += 1;
@@ -101,7 +111,7 @@ function FilePicker({ file, setFile, label }) {
 // Record one spending entry from a cause pool. The database splits it across
 // the pool's donations; this form only collects what was spent and the receipt.
 export default function ExpenseModal({ open, ngo, pools, requests, preselectRequest, onClose, onSaved }) {
-  const [cause, setCause] = useState("");
+  const [poolKey, setPoolKey] = useState("");
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const [requestId, setRequestId] = useState("");
@@ -113,7 +123,7 @@ export default function ExpenseModal({ open, ngo, pools, requests, preselectRequ
   useEffect(() => {
     if (!open) return;
     const req = preselectRequest || null;
-    setCause(pools.find((p) => p.available > 0)?.cause || "");
+    setPoolKey(pools.find((p) => p.available > 0)?.key || "");
     setRequestId(req?.id || "");
     setTitle(req ? `Payout to ${req.beneficiary_name}` : "");
     setAmount(req ? String(req.amount) : "");
@@ -126,7 +136,7 @@ export default function ExpenseModal({ open, ngo, pools, requests, preselectRequ
 
   if (!open || !ngo) return null;
 
-  const pool = pools.find((p) => p.cause === cause);
+  const pool = pools.find((p) => p.key === poolKey);
   const request = requests.find((r) => r.id === requestId);
   const value = request ? Number(request.amount) : Number(amount);
   const short = pool && value > pool.available;
@@ -142,10 +152,10 @@ export default function ExpenseModal({ open, ngo, pools, requests, preselectRequ
 
   async function handleSave() {
     setErrorMsg("");
-    if (!cause) return setErrorMsg("Choose the cause pool this was paid from.");
+    if (!pool) return setErrorMsg("Choose the pool this was paid from.");
     if (!title.trim()) return setErrorMsg("Describe what the money was spent on.");
     if (!(value > 0)) return setErrorMsg("Enter the amount spent.");
-    if (short) return setErrorMsg(`The ${cause} pool only has ${money(pool.available)} available.`);
+    if (short) return setErrorMsg(`${pool.label} only has ${money(pool.available)} available.`);
     if (!file) return setErrorMsg("Attach the receipt for this spending.");
 
     setSaving(true);
@@ -153,7 +163,8 @@ export default function ExpenseModal({ open, ngo, pools, requests, preselectRequ
       const receiptUrl = await uploadProof(ngo.id, file, "receipt");
       const { error } = await supabase.from("ngo_expenses").insert({
         ngo_id: ngo.id,
-        cause,
+        cause: pool.cause,
+        campaign_id: pool.campaignId,
         title: title.trim(),
         amount: value,
         beneficiary_request_id: requestId || null,
@@ -212,10 +223,10 @@ export default function ExpenseModal({ open, ngo, pools, requests, preselectRequ
             <label htmlFor="cause" className="block text-sm font-medium text-zinc-700">
               Paid from pool
             </label>
-            <select id="cause" value={cause} onChange={(e) => setCause(e.target.value)} className={inputClass}>
+            <select id="cause" value={poolKey} onChange={(e) => setPoolKey(e.target.value)} className={inputClass}>
               {fundable.map((p) => (
-                <option key={p.cause} value={p.cause}>
-                  {p.cause} · {money(p.available)} available
+                <option key={p.key} value={p.key}>
+                  {p.label} · {money(p.available)} available
                 </option>
               ))}
             </select>
@@ -286,7 +297,7 @@ export default function ExpenseModal({ open, ngo, pools, requests, preselectRequ
 
           {short && (
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              The {cause} pool only has {money(pool.available)} available.
+              {pool.label} only has {money(pool.available)} available.
             </p>
           )}
 

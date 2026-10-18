@@ -47,6 +47,8 @@ export default function DonorDashboard() {
   const [userId, setUserId] = useState(null);
   const [name, setName] = useState("");
   const [modalNgo, setModalNgo] = useState(null);
+  const [modalCampaign, setModalCampaign] = useState(null);
+  const [campaigns, setCampaigns] = useState([]);
   const [ratingNgo, setRatingNgo] = useState(null);
   const [reviewsNgo, setReviewsNgo] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
@@ -61,7 +63,7 @@ export default function DonorDashboard() {
         router.replace("/auth/login");
         return;
       }
-      const [ngoRes, donRes, ratingRes, userRes] = await Promise.all([
+      const [ngoRes, donRes, ratingRes, userRes, campRes] = await Promise.all([
         supabase.from("ngos").select("*").eq("status", "approved").order("org_name"),
         supabase
           .from("donations")
@@ -70,6 +72,7 @@ export default function DonorDashboard() {
           .order("created_at", { ascending: false }),
         supabase.from("ngo_ratings").select("*"),
         supabase.from("users").select("name").eq("id", session.user.id).single(),
+        fetchCampaigns(),
       ]);
       if (!active) return;
       if (ngoRes.error) setErrorMsg(ngoRes.error.message);
@@ -79,12 +82,17 @@ export default function DonorDashboard() {
       setNgos(ngoRes.data || []);
       setDonations(donRes.data || []);
       setRatings(ratingRes.data || []);
+      setCampaigns(campRes);
       setLoading(false);
     })();
     return () => {
       active = false;
     };
   }, [router]);
+
+  async function reloadCampaigns() {
+    setCampaigns(await fetchCampaigns());
+  }
 
   async function reloadRatings() {
     const { data } = await supabase.from("ngo_ratings").select("*");
@@ -150,6 +158,7 @@ export default function DonorDashboard() {
     return (a.org_name || "").localeCompare(b.org_name || "");
   });
   const ngoPaged = usePaged(sortedNgos);
+  const campPaged = usePaged(campaigns);
   const donPaged = usePaged(donations);
 
   return (
@@ -195,8 +204,15 @@ export default function DonorDashboard() {
         <DonationModal
           open={!!modalNgo}
           ngo={modalNgo}
-          onClose={() => setModalNgo(null)}
-          onDonated={reloadDonations}
+          campaign={modalCampaign}
+          onClose={() => {
+            setModalNgo(null);
+            setModalCampaign(null);
+          }}
+          onDonated={() => {
+            reloadDonations();
+            reloadCampaigns();
+          }}
         />
 
         <RatingModal
@@ -239,6 +255,60 @@ export default function DonorDashboard() {
                 <StatCard label="Donations" value={donations.length} />
                 <StatCard label="Completed" value={completed} accent />
               </div>
+
+              {/* Active campaigns */}
+              {campaigns.length > 0 && (
+                <div className="mt-8">
+                  <h2 className="text-base font-semibold text-zinc-900">Active campaigns</h2>
+                  <p className="text-sm text-zinc-600">
+                    NGOs raising a set amount. Every amount helps — a campaign closes once its goal is
+                    reached.
+                  </p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {campPaged.pageItems.map((c) => {
+                      const pct = Math.min(100, (Number(c.raised) / Number(c.goal)) * 100);
+                      return (
+                        <div
+                          key={c.id}
+                          className="card-hover flex flex-col rounded-2xl border border-zinc-200 bg-white p-4"
+                        >
+                          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                            {c.ngo.org_name}
+                          </p>
+                          <h3 className="mt-1 font-semibold text-zinc-900">{c.title}</h3>
+                          <p className="text-xs text-zinc-500">{c.cause}</p>
+                          {c.description && (
+                            <p className="mt-2 flex-1 text-sm text-zinc-600 line-clamp-3">{c.description}</p>
+                          )}
+                          <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-100">
+                            <div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
+                          </div>
+                          <p className="mt-2 text-sm">
+                            <span className="font-bold text-emerald-600">
+                              ${Number(c.raised).toFixed(2)}
+                            </span>
+                            <span className="text-zinc-500">
+                              {" "}
+                              of ${Number(c.goal).toFixed(2)} · {c.donor_count} donor
+                              {c.donor_count === 1 ? "" : "s"}
+                            </span>
+                          </p>
+                          <button
+                            onClick={() => {
+                              setModalCampaign(c);
+                              setModalNgo(c.ngo);
+                            }}
+                            className="mt-3 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                          >
+                            Donate to this campaign
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <Pagination paged={campPaged} className="mt-2 px-0 sm:px-0" />
+                </div>
+              )}
 
               {/* Browse NGOs */}
               <div className="mt-8">
@@ -402,6 +472,16 @@ export default function DonorDashboard() {
       </div>
     </>
   );
+}
+
+// Open campaigns of approved NGOs, with the NGO row the donation modal needs.
+async function fetchCampaigns() {
+  const { data } = await supabase
+    .from("campaigns")
+    .select("*, ngo:ngos(*)")
+    .eq("status", "active")
+    .order("created_at", { ascending: false });
+  return (data || []).filter((c) => c.ngo?.status === "approved");
 }
 
 function DashboardSkeleton() {

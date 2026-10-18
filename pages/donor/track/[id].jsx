@@ -142,7 +142,7 @@ export default function TrackDonation() {
       setLoading(true);
       const { data: don } = await supabase
         .from("donations")
-        .select("*")
+        .select("*, campaign:campaigns(title)")
         .eq("id", id)
         .maybeSingle();
       let ups = [];
@@ -239,6 +239,11 @@ export default function TrackDonation() {
                       {donation.ngo_name}
                     </h1>
                     <p className="mt-0.5 text-sm text-zinc-500">{donation.donation_type}</p>
+                    {donation.campaign && (
+                      <p className="mt-0.5 text-sm font-medium text-emerald-700">
+                        📣 Campaign: {donation.campaign.title}
+                      </p>
+                    )}
                   </div>
                   <div className="text-right">
                     <p className="text-xs uppercase tracking-wide text-zinc-500">Amount</p>

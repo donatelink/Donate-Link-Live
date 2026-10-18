@@ -30,7 +30,16 @@ const DONATION_TYPES = [
   { id: "others", Icon: Globe, name: "Others", desc: "Any other cause" },
 ];
 
+export const CAUSE_NAMES = DONATION_TYPES.map((t) => t.name);
+
 const PRESET_AMOUNTS = [10, 25, 50, 100, 500];
+
+// How much a campaign can still take. The database enforces the exact figure
+// (it also counts payments still in progress); this is the visible estimate.
+function campaignRemaining(campaign) {
+  if (!campaign) return Infinity;
+  return Math.max(0, Math.round((Number(campaign.goal) - Number(campaign.raised)) * 100) / 100);
+}
 
 const PAYMENT_METHODS = [
   {
@@ -59,7 +68,7 @@ const PAYMENT_METHODS = [
 
 const STEPS = ["Type", "Amount", "Payment", "Confirm"];
 
-export default function DonationModal({ open, onClose, ngo, onDonated }) {
+export default function DonationModal({ open, onClose, ngo, campaign, onDonated }) {
   const [step, setStep] = useState(0);
   const [type, setType] = useState(null);
   const [amount, setAmount] = useState(50);
@@ -73,17 +82,19 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
 
   useEffect(() => {
     if (!open) return;
-    setStep(0);
-    setType(null);
-    setAmount(50);
-    setCustomAmount("50");
+    // A campaign fixes the cause, so its donation starts at the Amount step.
+    const start = campaign ? Math.min(50, campaignRemaining(campaign)) : 50;
+    setStep(campaign ? 1 : 0);
+    setType(campaign ? DONATION_TYPES.find((t) => t.name === campaign.cause)?.id || "others" : null);
+    setAmount(start);
+    setCustomAmount(String(start));
     setMethod("polygon");
     setSubmitting(false);
     setErrorMsg("");
     setDone(false);
     setTxHash("");
     setStatusMsg("");
-  }, [open]);
+  }, [open, campaign]);
 
   useEffect(() => {
     function onKey(e) {
@@ -96,9 +107,11 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
   if (!open || !ngo) return null;
 
   const finalAmount = customAmount ? Number(customAmount) : amount;
+  const remaining = campaignRemaining(campaign);
+  const minStep = campaign ? 1 : 0;
   const canNext =
     (step === 0 && type) ||
-    (step === 1 && finalAmount > 0) ||
+    (step === 1 && finalAmount > 0 && finalAmount <= remaining) ||
     (step === 2 && method) ||
     step === 3;
 
@@ -162,6 +175,7 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
         donor_name: user.user_metadata?.name || user.email,
         donor_email: user.email,
         ngo_name: ngo.org_name,
+        campaign_id: campaign?.id || null,
         payment_method: method,
         chain: onChain ? "polygon-amoy" : null,
         onchain_status: onChain ? "pending" : null,
@@ -305,7 +319,11 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
           </div>
         ) : (
           <>
-            <Header step={step} ngoName={ngo.org_name} onClose={onClose} />
+            <Header
+              step={step}
+              ngoName={campaign ? `${ngo.org_name} · ${campaign.title}` : ngo.org_name}
+              onClose={onClose}
+            />
             <div className="flex-1 overflow-y-auto px-6 py-6">
               {errorMsg && (
                 <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -325,6 +343,7 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
                   setAmount={setAmount}
                   customAmount={customAmount}
                   setCustomAmount={setCustomAmount}
+                  remaining={remaining}
                 />
               )}
               {step === 2 && (
@@ -347,9 +366,10 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
             </div>
             <Footer
               step={step}
+              minStep={minStep}
               canNext={canNext}
               submitting={submitting}
-              onBack={() => setStep(Math.max(0, step - 1))}
+              onBack={() => setStep(Math.max(minStep, step - 1))}
               onNext={handleNext}
             />
           </>
@@ -399,12 +419,12 @@ function Header({ step, ngoName, onClose }) {
   );
 }
 
-function Footer({ step, canNext, submitting, onBack, onNext }) {
+function Footer({ step, minStep = 0, canNext, submitting, onBack, onNext }) {
   return (
     <div className="flex items-center justify-between border-t border-zinc-200 bg-zinc-50 px-6 py-4">
       <button
         onClick={onBack}
-        disabled={step === 0 || submitting}
+        disabled={step === minStep || submitting}
         className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 disabled:cursor-not-allowed disabled:opacity-50 hover:enabled:border-zinc-400"
       >
         Back
@@ -459,7 +479,9 @@ function StepType({ type, setType }) {
   );
 }
 
-function StepAmount({ amount, setAmount, customAmount, setCustomAmount }) {
+function StepAmount({ amount, setAmount, customAmount, setCustomAmount, remaining = Infinity }) {
+  const capped = Number.isFinite(remaining);
+  const over = capped && Number(customAmount) > remaining;
   return (
     <div>
       <h3 className="text-sm font-semibold text-zinc-900">Amount (USD)</h3>
@@ -469,11 +491,12 @@ function StepAmount({ amount, setAmount, customAmount, setCustomAmount }) {
         {PRESET_AMOUNTS.map((a) => (
           <button
             key={a}
+            disabled={capped && a > remaining}
             onClick={() => {
               setAmount(a);
               setCustomAmount(String(a));
             }}
-            className={`rounded-lg border py-3 text-sm font-semibold transition ${
+            className={`rounded-lg border py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
               Number(customAmount) === a
                 ? "border-emerald-500 bg-emerald-50 text-emerald-700"
                 : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300"
@@ -499,6 +522,14 @@ function StepAmount({ amount, setAmount, customAmount, setCustomAmount }) {
           />
         </div>
       </div>
+
+      {capped && (
+        <p className={`mt-3 text-xs ${over ? "font-semibold text-red-600" : "text-zinc-500"}`}>
+          {over
+            ? `This campaign only needs $${remaining.toFixed(2)} more — lower your amount.`
+            : `Up to $${remaining.toFixed(2)} left to reach the campaign goal.`}
+        </p>
+      )}
     </div>
   );
 }

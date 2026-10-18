@@ -2,6 +2,7 @@ import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useState } from "react";
+import CampaignModal from "@/components/CampaignModal";
 import ExpenseModal, { DeliverModal, computePools } from "@/components/ExpenseModal";
 import StageAdvanceModal from "@/components/StageAdvanceModal";
 import Pagination, { usePaged } from "@/components/Pagination";
@@ -70,6 +71,7 @@ function StageBadge({ stage }) {
 const MENU = [
   { id: "donations", label: "Donations", icon: "💸" },
   { id: "requests", label: "Beneficiary Requests", icon: "🤝" },
+  { id: "campaigns", label: "Campaigns", icon: "📣" },
   { id: "spending", label: "Spending", icon: "🧾" },
   { id: "payments", label: "Payment Methods", icon: "💳" },
 ];
@@ -93,6 +95,8 @@ export default function NgoDashboard() {
     if (typeof v === "string" && MENU.some((m) => m.id === v)) setView(v);
   }, [router.query.view]);
   const [expenses, setExpenses] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
+  const [campaignOpen, setCampaignOpen] = useState(false);
   const [expenseOpen, setExpenseOpen] = useState(false);
   const [payRequest, setPayRequest] = useState(null);
   const [deliverExp, setDeliverExp] = useState(null);
@@ -139,7 +143,7 @@ export default function NgoDashboard() {
       setNgo(ngoRow || null);
 
       if (ngoRow) {
-        const [donRes, reqRes, expRes] = await Promise.all([
+        const [donRes, reqRes, expRes, campRes] = await Promise.all([
           supabase
             .from("donations")
             .select("*")
@@ -155,10 +159,16 @@ export default function NgoDashboard() {
             .select("*")
             .eq("ngo_id", ngoRow.id)
             .order("created_at", { ascending: false }),
+          supabase
+            .from("campaigns")
+            .select("*")
+            .eq("ngo_id", ngoRow.id)
+            .order("created_at", { ascending: false }),
         ]);
         if (active) {
           setDonations(donRes.data || []);
           setExpenses(expRes.data || []);
+          setCampaigns(campRes.data || []);
           setRequests(reqRes.data || []);
           setProfiles(await fetchProfiles(reqRes.data || []));
         }
@@ -202,10 +212,21 @@ export default function NgoDashboard() {
     setExpenses(data || []);
   }
 
+  async function loadCampaigns() {
+    if (!ngo) return;
+    const { data } = await supabase
+      .from("campaigns")
+      .select("*")
+      .eq("ngo_id", ngo.id)
+      .order("created_at", { ascending: false });
+    setCampaigns(data || []);
+  }
+
   function reloadAll() {
     loadDonations();
     loadRequests();
     loadExpenses();
+    loadCampaigns();
   }
 
   async function handleSignOut() {
@@ -231,7 +252,7 @@ export default function NgoDashboard() {
   const totalRaised = donations.reduce((sum, d) => sum + Number(d.amount), 0);
   const completed = donations.filter((d) => d.stage === 5).length;
   const pendingReqCount = requests.filter((r) => r.status === "pending").length;
-  const pools = useMemo(() => computePools(donations), [donations]);
+  const pools = useMemo(() => computePools(donations, campaigns), [donations, campaigns]);
   const payableRequests = requests.filter((r) => r.status === "verified" && r.stage < 4);
 
   const activeMenu = MENU.find((m) => m.id === view);
@@ -266,6 +287,13 @@ export default function NgoDashboard() {
           setPayRequest(null);
         }}
         onSaved={reloadAll}
+      />
+
+      <CampaignModal
+        open={campaignOpen}
+        ngo={ngo}
+        onClose={() => setCampaignOpen(false)}
+        onSaved={loadCampaigns}
       />
 
       <DeliverModal
@@ -424,9 +452,18 @@ export default function NgoDashboard() {
               <PaymentMethodsView ngo={ngo} onSaved={(row) => setNgo(row)} />
             )}
 
+            {!loading && ngo && view === "campaigns" && (
+              <CampaignsView
+                campaigns={campaigns}
+                onNew={() => setCampaignOpen(true)}
+                reload={loadCampaigns}
+              />
+            )}
+
             {!loading && ngo && view === "spending" && (
               <SpendingView
                 pools={pools}
+                campaigns={campaigns}
                 expenses={expenses}
                 requests={requests}
                 onRecord={() => {
@@ -863,8 +900,9 @@ function StatCard({ label, value, accent }) {
 }
 
 /* ---------- Spending view (cause pools) ---------- */
-function SpendingView({ pools, expenses, requests, onRecord, onDeliver }) {
+function SpendingView({ pools, campaigns, expenses, requests, onRecord, onDeliver }) {
   const reqName = Object.fromEntries(requests.map((r) => [r.id, r.beneficiary_name]));
+  const campName = Object.fromEntries(campaigns.map((c) => [c.id, c.title]));
   const available = pools.reduce((sum, p) => sum + p.available, 0);
   const expPaged = usePaged(expenses);
 
@@ -897,9 +935,9 @@ function SpendingView({ pools, expenses, requests, onRecord, onDeliver }) {
             {pools.map((p) => {
               const pct = p.received > 0 ? Math.min(100, (p.spent / p.received) * 100) : 0;
               return (
-                <div key={p.cause} className="rounded-2xl border border-zinc-200 bg-white p-4">
+                <div key={p.key} className="rounded-2xl border border-zinc-200 bg-white p-4">
                   <div className="flex items-start justify-between gap-2">
-                    <h3 className="font-semibold text-zinc-900">{p.cause}</h3>
+                    <h3 className="font-semibold text-zinc-900">{p.label}</h3>
                     <span className="text-xs text-zinc-500">
                       {p.count} donation{p.count === 1 ? "" : "s"}
                     </span>
@@ -934,7 +972,8 @@ function SpendingView({ pools, expenses, requests, onRecord, onDeliver }) {
                 <div className="min-w-0">
                   <div className="font-semibold text-zinc-900">{e.title}</div>
                   <div className="mt-0.5 text-xs text-zinc-500">
-                    {e.cause} pool · {fmtDate(e.spent_on)}
+                    {e.campaign_id ? `📣 ${campName[e.campaign_id] || "Campaign"}` : `${e.cause} pool`} ·{" "}
+                    {fmtDate(e.spent_on)}
                     {e.beneficiary_request_id && (
                       <> · payout to {reqName[e.beneficiary_request_id] || "beneficiary"}</>
                     )}
@@ -1153,6 +1192,107 @@ function PaymentMethodsView({ ngo, onSaved }) {
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
           Donors cannot pay you yet. Connect Stripe or add a wallet to start receiving donations.
         </p>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Campaigns (fundraising goals) ---------- */
+const CAMPAIGN_BADGE = {
+  active: ["Active", "bg-emerald-100 text-emerald-700"],
+  completed: ["Goal reached 🎉", "bg-emerald-600 text-white"],
+  closed: ["Closed", "bg-zinc-200 text-zinc-700"],
+};
+
+function CampaignsView({ campaigns, onNew, reload }) {
+  const paged = usePaged(campaigns);
+  const [closingId, setClosingId] = useState(null);
+  const [errorMsg, setErrorMsg] = useState("");
+
+  async function closeEarly(c) {
+    if (!window.confirm(`Close "${c.title}" now? It will stop accepting donations.`)) return;
+    setErrorMsg("");
+    setClosingId(c.id);
+    const { error } = await supabase.rpc("close_campaign", { p_campaign: c.id });
+    setClosingId(null);
+    if (error) return setErrorMsg(error.message);
+    reload();
+  }
+
+  return (
+    <div className="mt-6 space-y-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <p className="max-w-2xl text-sm text-zinc-600">
+          Ask donors for a set amount for one cause. A campaign closes by itself once the goal is
+          raised, and its money can only be spent on that campaign.
+        </p>
+        <button
+          onClick={onNew}
+          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+        >
+          + New campaign
+        </button>
+      </div>
+
+      {errorMsg && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {errorMsg}
+        </div>
+      )}
+
+      {campaigns.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-6 py-12 text-center text-sm text-zinc-600">
+          No campaigns yet. Start one to raise a set amount for a cause.
+        </div>
+      ) : (
+        <>
+          <div className="grid gap-3 md:grid-cols-2">
+            {paged.pageItems.map((c) => {
+              const pct = Math.min(100, (Number(c.raised) / Number(c.goal)) * 100);
+              const [label, cls] = CAMPAIGN_BADGE[c.status] || CAMPAIGN_BADGE.active;
+              return (
+                <div key={c.id} className="rounded-2xl border border-zinc-200 bg-white p-4 sm:p-5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h3 className="font-semibold text-zinc-900">{c.title}</h3>
+                      <p className="text-xs text-zinc-500">
+                        {c.cause} · started {fmtDate(c.created_at)}
+                      </p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${cls}`}>
+                      {label}
+                    </span>
+                  </div>
+                  {c.description && (
+                    <p className="mt-2 text-sm text-zinc-600 line-clamp-2">{c.description}</p>
+                  )}
+                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-100">
+                    <div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm">
+                      <span className="font-bold text-emerald-600">{money(c.raised)}</span>
+                      <span className="text-zinc-500">
+                        {" "}
+                        of {money(c.goal)} · {c.donor_count} donor{c.donor_count === 1 ? "" : "s"}
+                      </span>
+                    </p>
+                    {c.status === "active" && (
+                      <button
+                        onClick={() => closeEarly(c)}
+                        disabled={closingId === c.id}
+                        className="text-xs font-semibold text-zinc-500 hover:text-red-600 disabled:opacity-50"
+                      >
+                        {closingId === c.id ? "Closing…" : "Close early"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <Pagination paged={paged} className="px-0 sm:px-0" />
+        </>
       )}
     </div>
   );
