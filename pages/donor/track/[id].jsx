@@ -42,6 +42,84 @@ function ProofLink({ url, label }) {
   );
 }
 
+function money(n) {
+  return `$${Number(n || 0).toFixed(2)}`;
+}
+
+// The donation's share of each spending record from the NGO's cause pool.
+function WhereMoneyWent({ donation, allocations }) {
+  const net = Number(donation.net_amount ?? donation.amount);
+  const used = allocations.reduce((sum, a) => sum + Number(a.amount), 0);
+  const fee = Number(donation.amount) - net;
+  const pct = net > 0 ? Math.min(100, (used / net) * 100) : 0;
+  const people = allocations.filter((a) => a.expense?.request).length;
+
+  return (
+    <div className="mt-4 rounded-2xl border border-zinc-200 bg-white p-4 sm:p-6">
+      <h2 className="text-base font-semibold text-zinc-900">Where your money went</h2>
+      <p className="text-xs text-zinc-500">
+        Your donation joined the NGO&apos;s {donation.donation_type} pool. Each line is your share
+        of a spending record, backed by its receipt.
+        {people > 0 && ` It reached ${people} ${people === 1 ? "person" : "people"} directly.`}
+      </p>
+
+      <ul className="mt-4 divide-y divide-zinc-100">
+        {allocations.map((a) => {
+          const e = a.expense || {};
+          return (
+            <li key={a.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
+              <div className="min-w-0">
+                <p className="font-medium text-zinc-900">
+                  {e.request ? `Payout to ${e.request.beneficiary_name}` : e.title}
+                </p>
+                <p className="mt-0.5 text-xs text-zinc-500">
+                  {e.request && `${e.title} · `}
+                  {money(e.amount)} total · {fmtDate(e.spent_on)}
+                </p>
+                <div className="mt-1.5 flex flex-wrap gap-3 text-xs font-semibold">
+                  {e.receipt_url && (
+                    <a href={e.receipt_url} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline">
+                      Receipt
+                    </a>
+                  )}
+                  {e.delivery_proof_url && (
+                    <a href={e.delivery_proof_url} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline">
+                      Delivery proof
+                    </a>
+                  )}
+                  {e.status === "completed" ? (
+                    <span className="text-emerald-600">✓ Delivered</span>
+                  ) : (
+                    <span className="text-zinc-400">Delivery pending</span>
+                  )}
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="font-bold text-emerald-600">{money(a.amount)}</p>
+                <p className="text-xs text-zinc-500">your share</p>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div className="mt-3 border-t border-zinc-200 pt-3">
+        <div className="h-1.5 overflow-hidden rounded-full bg-zinc-100">
+          <div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
+        </div>
+        <p className="mt-2 text-sm font-semibold text-zinc-800">
+          {money(used)} of {money(net)} accounted for {used >= net - 0.005 ? "✅" : ""}
+        </p>
+        {fee > 0.005 && (
+          <p className="text-xs text-zinc-500">
+            {money(donation.amount)} donated − {money(fee)} card processing fee paid by the NGO.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function fmtDate(iso) {
   if (!iso) return "";
   return new Date(iso).toLocaleDateString();
@@ -54,6 +132,7 @@ export default function TrackDonation() {
   const [updates, setUpdates] = useState([]);
   const [beneficiaryRequest, setBeneficiaryRequest] = useState(null);
   const [beneficiaryUpdates, setBeneficiaryUpdates] = useState([]);
+  const [allocations, setAllocations] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -69,6 +148,7 @@ export default function TrackDonation() {
       let ups = [];
       let benReq = null;
       let benUps = [];
+      let allocs = [];
       if (don) {
         const promises = [
           supabase
@@ -76,6 +156,13 @@ export default function TrackDonation() {
             .select("*")
             .eq("donation_id", id)
             .order("stage", { ascending: true }),
+          supabase
+            .from("donation_allocations")
+            .select(
+              "id, amount, created_at, expense:ngo_expenses(title, cause, amount, receipt_url, delivery_proof_url, status, spent_on, request:beneficiary_requests(beneficiary_name))"
+            )
+            .eq("donation_id", id)
+            .order("created_at", { ascending: true }),
         ];
         if (don.beneficiary_request_id) {
           promises.push(
@@ -93,9 +180,10 @@ export default function TrackDonation() {
         }
         const results = await Promise.all(promises);
         ups = results[0].data || [];
+        allocs = results[1].data || [];
         if (don.beneficiary_request_id) {
-          benReq = results[1].data || null;
-          benUps = results[2].data || [];
+          benReq = results[2].data || null;
+          benUps = results[3].data || [];
         }
       }
       if (active) {
@@ -103,6 +191,7 @@ export default function TrackDonation() {
         setUpdates(ups);
         setBeneficiaryRequest(benReq);
         setBeneficiaryUpdates(benUps);
+        setAllocations(allocs);
         setLoading(false);
       }
     })();
@@ -253,6 +342,10 @@ export default function TrackDonation() {
                   </div>
                 )}
               </div>
+
+              {allocations.length > 0 && (
+                <WhereMoneyWent donation={donation} allocations={allocations} />
+              )}
 
               <div className="mt-4 rounded-2xl border border-zinc-200 bg-white p-4 sm:p-6">
                 <h2 className="text-base font-semibold text-zinc-900">Lifecycle & Proof</h2>

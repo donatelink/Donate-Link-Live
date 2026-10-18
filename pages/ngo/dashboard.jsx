@@ -1,7 +1,8 @@
 import Head from "next/head";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import ExpenseModal, { DeliverModal, computePools } from "@/components/ExpenseModal";
 import StageAdvanceModal from "@/components/StageAdvanceModal";
 import supabase from "@/utils/supabase";
 
@@ -40,6 +41,16 @@ async function fetchProfiles(reqList) {
   return map;
 }
 
+function money(n) {
+  return `$${Number(n || 0).toFixed(2)}`;
+}
+
+// Paid donations past Stage 1 sit in a cause pool and advance on their own as
+// the NGO records spending; only legacy hand-advanced ones keep the button.
+function isPooled(d) {
+  return d.stage >= 2 && !d.manual_stages;
+}
+
 // A donation whose payment hasn't cleared must not be advanced by hand.
 function unpaidLabel(d) {
   if (d.payment_status === "pending" || d.onchain_status === "pending") return "Awaiting payment";
@@ -58,6 +69,7 @@ function StageBadge({ stage }) {
 const MENU = [
   { id: "donations", label: "Donations", icon: "💸" },
   { id: "requests", label: "Beneficiary Requests", icon: "🤝" },
+  { id: "spending", label: "Spending", icon: "🧾" },
 ];
 
 export default function NgoDashboard() {
@@ -72,6 +84,10 @@ export default function NgoDashboard() {
   const [advanceRec, setAdvanceRec] = useState(null);
   const [advanceKind, setAdvanceKind] = useState("donation");
   const [view, setView] = useState("donations");
+  const [expenses, setExpenses] = useState([]);
+  const [expenseOpen, setExpenseOpen] = useState(false);
+  const [payRequest, setPayRequest] = useState(null);
+  const [deliverExp, setDeliverExp] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -115,7 +131,7 @@ export default function NgoDashboard() {
       setNgo(ngoRow || null);
 
       if (ngoRow) {
-        const [donRes, reqRes] = await Promise.all([
+        const [donRes, reqRes, expRes] = await Promise.all([
           supabase
             .from("donations")
             .select("*")
@@ -126,9 +142,15 @@ export default function NgoDashboard() {
             .select("*")
             .eq("ngo_id", ngoRow.id)
             .order("created_at", { ascending: false }),
+          supabase
+            .from("ngo_expenses")
+            .select("*")
+            .eq("ngo_id", ngoRow.id)
+            .order("created_at", { ascending: false }),
         ]);
         if (active) {
           setDonations(donRes.data || []);
+          setExpenses(expRes.data || []);
           setRequests(reqRes.data || []);
           setProfiles(await fetchProfiles(reqRes.data || []));
         }
@@ -162,6 +184,22 @@ export default function NgoDashboard() {
     setProfiles(await fetchProfiles(data || []));
   }
 
+  async function loadExpenses() {
+    if (!ngo) return;
+    const { data } = await supabase
+      .from("ngo_expenses")
+      .select("*")
+      .eq("ngo_id", ngo.id)
+      .order("created_at", { ascending: false });
+    setExpenses(data || []);
+  }
+
+  function reloadAll() {
+    loadDonations();
+    loadRequests();
+    loadExpenses();
+  }
+
   async function handleSignOut() {
     await supabase.auth.signOut();
     router.push("/");
@@ -185,7 +223,8 @@ export default function NgoDashboard() {
   const totalRaised = donations.reduce((sum, d) => sum + Number(d.amount), 0);
   const completed = donations.filter((d) => d.stage === 5).length;
   const pendingReqCount = requests.filter((r) => r.status === "pending").length;
-  const verifiedRequests = requests.filter((r) => r.status === "verified");
+  const pools = useMemo(() => computePools(donations), [donations]);
+  const payableRequests = requests.filter((r) => r.status === "verified" && r.stage < 4);
 
   const activeMenu = MENU.find((m) => m.id === view);
 
@@ -199,12 +238,34 @@ export default function NgoDashboard() {
         open={!!advanceRec}
         record={advanceRec}
         kind={advanceKind}
-        verifiedRequests={verifiedRequests}
-        onClose={() => setAdvanceRec(null)}
-        onAdvanced={() => {
-          loadDonations();
-          loadRequests();
+        onPayFromPool={(req) => {
+          setView("spending");
+          setPayRequest(req);
+          setExpenseOpen(true);
         }}
+        onClose={() => setAdvanceRec(null)}
+        onAdvanced={reloadAll}
+      />
+
+      <ExpenseModal
+        open={expenseOpen}
+        ngo={ngo}
+        pools={pools}
+        requests={payableRequests}
+        preselectRequest={payRequest}
+        onClose={() => {
+          setExpenseOpen(false);
+          setPayRequest(null);
+        }}
+        onSaved={reloadAll}
+      />
+
+      <DeliverModal
+        open={!!deliverExp}
+        ngo={ngo}
+        expense={deliverExp}
+        onClose={() => setDeliverExp(null)}
+        onSaved={reloadAll}
       />
 
       <div className="min-h-screen bg-zinc-50 md:flex">
@@ -349,6 +410,19 @@ export default function NgoDashboard() {
 
             {!loading && ngo && view === "requests" && (
               <RequestsView ngo={ngo} requests={requests} profiles={profiles} reload={loadRequests} />
+            )}
+
+            {!loading && ngo && view === "spending" && (
+              <SpendingView
+                pools={pools}
+                expenses={expenses}
+                requests={requests}
+                onRecord={() => {
+                  setPayRequest(null);
+                  setExpenseOpen(true);
+                }}
+                onDeliver={setDeliverExp}
+              />
             )}
           </div>
         </main>
@@ -500,6 +574,12 @@ function DonationsView({
                       {!isBen && unpaidLabel(r) ? (
                         <span className="mt-2 inline-block text-xs font-semibold text-amber-600">
                           {unpaidLabel(r)}
+                        </span>
+                      ) : !isBen && isPooled(r) ? (
+                        <span className="mt-2 block text-xs font-semibold text-emerald-600">
+                          {r.stage === 5
+                            ? "✓ Completed"
+                            : `${money(r.allocated_amount)} of ${money(r.net_amount ?? r.amount)} spent`}
                         </span>
                       ) : r.stage < 5 ? (
                         <button
@@ -758,6 +838,118 @@ function StatCard({ label, value, accent }) {
         }`}
       >
         {value}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Spending view (cause pools) ---------- */
+function SpendingView({ pools, expenses, requests, onRecord, onDeliver }) {
+  const reqName = Object.fromEntries(requests.map((r) => [r.id, r.beneficiary_name]));
+  const available = pools.reduce((sum, p) => sum + p.available, 0);
+
+  return (
+    <div className="mt-6 space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <p className="max-w-2xl text-sm text-zinc-600">
+          Paid donations collect in one pool per cause. Record each spending once with its receipt —
+          DonateLink splits it across the pool&apos;s donations, oldest first, and every donor sees
+          exactly where their money went.
+        </p>
+        <button
+          onClick={onRecord}
+          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+        >
+          + Record spending
+        </button>
+      </div>
+
+      {pools.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-zinc-300 bg-white px-6 py-12 text-center text-sm text-zinc-600">
+          No cause pools yet. A pool appears as soon as a donation for that cause is paid.
+        </div>
+      ) : (
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Cause pools · {money(available)} available
+          </p>
+          <div className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {pools.map((p) => {
+              const pct = p.received > 0 ? Math.min(100, (p.spent / p.received) * 100) : 0;
+              return (
+                <div key={p.cause} className="rounded-2xl border border-zinc-200 bg-white p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <h3 className="font-semibold text-zinc-900">{p.cause}</h3>
+                    <span className="text-xs text-zinc-500">
+                      {p.count} donation{p.count === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-2xl font-bold text-emerald-600">{money(p.available)}</p>
+                  <p className="text-xs text-zinc-500">available</p>
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-zinc-100">
+                    <div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
+                  </div>
+                  <p className="mt-1.5 text-xs text-zinc-500">
+                    {money(p.spent)} spent of {money(p.received)} received
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="rounded-2xl border border-zinc-200 bg-white">
+        <div className="border-b border-zinc-200 px-4 py-3 sm:px-5">
+          <h2 className="text-base font-semibold text-zinc-900">Spending records</h2>
+          <p className="text-xs text-zinc-500">Permanent — records cannot be edited or deleted.</p>
+        </div>
+        {expenses.length === 0 ? (
+          <p className="px-5 py-10 text-center text-sm text-zinc-500">Nothing recorded yet.</p>
+        ) : (
+          <ul className="divide-y divide-zinc-200">
+            {expenses.map((e) => (
+              <li key={e.id} className="flex flex-wrap items-start justify-between gap-3 px-4 py-4 sm:px-5">
+                <div className="min-w-0">
+                  <div className="font-semibold text-zinc-900">{e.title}</div>
+                  <div className="mt-0.5 text-xs text-zinc-500">
+                    {e.cause} pool · {fmtDate(e.spent_on)}
+                    {e.beneficiary_request_id && (
+                      <> · payout to {reqName[e.beneficiary_request_id] || "beneficiary"}</>
+                    )}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold">
+                    <a href={e.receipt_url} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline">
+                      Receipt
+                    </a>
+                    {e.delivery_proof_url && (
+                      <a href={e.delivery_proof_url} target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline">
+                        Delivery proof
+                      </a>
+                    )}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="font-bold text-zinc-900">{money(e.amount)}</div>
+                  {e.status === "completed" ? (
+                    <span className="mt-2 inline-block text-xs font-semibold text-emerald-600">✓ Delivered</span>
+                  ) : e.beneficiary_request_id ? (
+                    <span className="mt-2 block max-w-[12rem] text-xs text-zinc-500">
+                      Delivered when the payout reaches Stage 5
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => onDeliver(e)}
+                      className="mt-2 rounded-lg border border-emerald-600 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50"
+                    >
+                      Mark delivered
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );
