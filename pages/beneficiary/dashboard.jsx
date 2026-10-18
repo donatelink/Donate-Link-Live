@@ -7,6 +7,7 @@ import RatingModal from "@/components/RatingModal";
 import RequestFundingModal from "@/components/RequestFundingModal";
 import ReviewsModal from "@/components/ReviewsModal";
 import StarRating from "@/components/StarRating";
+import NotificationBell from "@/components/NotificationBell";
 import supabase from "@/utils/supabase";
 import Pagination, { usePaged } from "@/components/Pagination";
 
@@ -203,6 +204,7 @@ export default function BeneficiaryDashboard() {
               <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 sm:px-3">
                 Beneficiary
               </span>
+              <NotificationBell />
               <Link
                 href="/feedback"
                 className="rounded-full border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 hover:border-zinc-400 sm:px-4 sm:text-sm"

@@ -4,6 +4,7 @@ import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import Avatar from "@/components/Avatar";
 import DonationModal from "@/components/DonationModal";
+import NotificationBell from "@/components/NotificationBell";
 import Pagination, { usePaged } from "@/components/Pagination";
 import RatingModal from "@/components/RatingModal";
 import ReviewsModal from "@/components/ReviewsModal";
@@ -174,6 +175,7 @@ export default function DonorDashboard() {
             </Link>
             <div className="flex items-center gap-2 sm:gap-3">
               <span className="hidden text-sm text-zinc-600 sm:inline">Donor</span>
+              <NotificationBell />
               <Link
                 href="/feedback"
                 className="rounded-full border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 hover:border-zinc-400 sm:px-4 sm:text-sm"

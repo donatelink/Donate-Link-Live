@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import CampaignModal from "@/components/CampaignModal";
+import NotificationBell from "@/components/NotificationBell";
 import { AssignPayoutModal, assignable, openRequests, payoutTotals } from "@/components/PayoutEditor";
 import StageAdvanceModal from "@/components/StageAdvanceModal";
 import Pagination, { usePaged } from "@/components/Pagination";
@@ -374,7 +375,8 @@ export default function NgoDashboard() {
             <div className="flex items-center gap-2">
               <span className="text-2xl">{activeMenu?.icon}</span>
               <h1 className="text-xl font-bold text-zinc-900 sm:text-2xl">{activeMenu?.label}</h1>
-              <span className="ml-auto rounded-full bg-emerald-100 px-4 py-1.5 text-sm font-bold uppercase tracking-wide text-emerald-700">
+              <NotificationBell className="ml-auto" />
+              <span className="rounded-full bg-emerald-100 px-4 py-1.5 text-sm font-bold uppercase tracking-wide text-emerald-700">
                 NGO
               </span>
             </div>
