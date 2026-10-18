@@ -28,6 +28,7 @@ export default function TrackRequest() {
   const [ngo, setNgo] = useState(null);
   const [updates, setUpdates] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [payouts, setPayouts] = useState([]);
 
   useEffect(() => {
     if (!id) return;
@@ -42,22 +43,30 @@ export default function TrackRequest() {
 
       let ngoRow = null;
       let ups = [];
+      let pays = [];
       if (req) {
-        const [n, u] = await Promise.all([
+        const [n, u, p] = await Promise.all([
           supabase.from("ngos").select("*").eq("id", req.ngo_id).maybeSingle(),
           supabase
             .from("beneficiary_request_updates")
             .select("*")
             .eq("request_id", req.id)
             .order("stage", { ascending: true }),
+          supabase
+            .from("donation_payouts")
+            .select("id, amount, receipt_url, created_at")
+            .eq("beneficiary_request_id", req.id)
+            .order("created_at", { ascending: true }),
         ]);
         ngoRow = n.data;
         ups = u.data || [];
+        pays = p.data || [];
       }
       if (active) {
         setRequest(req || null);
         setNgo(ngoRow);
         setUpdates(ups);
+        setPayouts(pays);
         setLoading(false);
       }
     })();
@@ -119,6 +128,34 @@ export default function TrackRequest() {
                   </div>
                 </div>
               </div>
+
+              {payouts.length > 0 && (
+                <div className="mt-4 rounded-2xl border border-zinc-200 bg-white p-4 sm:p-6">
+                  <h2 className="text-base font-semibold text-zinc-900">Money received</h2>
+                  <p className="mt-1 text-sm text-zinc-600">
+                    <span className="font-bold text-emerald-600">
+                      ${payouts.reduce((s, p) => s + Number(p.amount), 0).toFixed(2)}
+                    </span>{" "}
+                    of ${Number(request.amount).toFixed(2)} from {payouts.length}{" "}
+                    {payouts.length === 1 ? "payment" : "payments"}
+                  </p>
+                  <ul className="mt-3 space-y-1.5">
+                    {payouts.map((p) => (
+                      <li key={p.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                        <a
+                          href={p.receipt_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-semibold text-emerald-700 underline"
+                        >
+                          Receipt · {fmtDate(p.created_at)}
+                        </a>
+                        <span className="font-semibold text-zinc-900">${Number(p.amount).toFixed(2)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {rejected && (
                 <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4 sm:p-6">

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import CampaignModal from "@/components/CampaignModal";
+import { AssignPayoutModal, assignable, openRequests, payoutTotals } from "@/components/PayoutEditor";
 import StageAdvanceModal from "@/components/StageAdvanceModal";
 import Pagination, { usePaged } from "@/components/Pagination";
 import supabase from "@/utils/supabase";
@@ -46,6 +47,36 @@ function money(n) {
   return `$${Number(n || 0).toFixed(2)}`;
 }
 
+// Split progress under a row: how much of a donation went to beneficiaries, or
+// how much a beneficiary has received so far.
+function PayoutLine({ r, isBen, totals, leftToGive, onAssign }) {
+  if (isBen) {
+    const got = totals.byRequest[r.id] || 0;
+    if (got <= 0) return null;
+    return (
+      <p className="mt-1.5 text-xs font-medium text-blue-700">
+        Received {money(got)} of {money(r.amount)}
+      </p>
+    );
+  }
+  const given = totals.byDonation[r.id] || 0;
+  if (given <= 0) return null;
+  const left = leftToGive(r);
+  return (
+    <p className="mt-1.5 flex flex-wrap items-center gap-2 text-xs font-medium text-emerald-700">
+      Given to beneficiaries: {money(given)} of {money(assignable(r))}
+      {left > 0 && (
+        <button
+          onClick={() => onAssign(r)}
+          className="rounded-md border border-emerald-600 px-2 py-0.5 font-semibold text-emerald-700 hover:bg-emerald-50"
+        >
+          Give remaining {money(left)}
+        </button>
+      )}
+    </p>
+  );
+}
+
 // A donation whose payment hasn't cleared must not be advanced by hand.
 function unpaidLabel(d) {
   if (d.payment_status === "pending" || d.onchain_status === "pending") return "Awaiting payment";
@@ -87,6 +118,8 @@ export default function NgoDashboard() {
     if (typeof v === "string" && MENU.some((m) => m.id === v)) setView(v);
   }, [router.query.view]);
   const [campaigns, setCampaigns] = useState([]);
+  const [payouts, setPayouts] = useState([]);
+  const [assignRec, setAssignRec] = useState(null);
   const [campaignOpen, setCampaignOpen] = useState(false);
 
   useEffect(() => {
@@ -131,7 +164,7 @@ export default function NgoDashboard() {
       setNgo(ngoRow || null);
 
       if (ngoRow) {
-        const [donRes, reqRes, campRes] = await Promise.all([
+        const [donRes, reqRes, campRes, payRes] = await Promise.all([
           supabase
             .from("donations")
             .select("*")
@@ -147,9 +180,11 @@ export default function NgoDashboard() {
             .select("*")
             .eq("ngo_id", ngoRow.id)
             .order("created_at", { ascending: false }),
+          supabase.from("donation_payouts").select("*").eq("ngo_id", ngoRow.id),
         ]);
         if (active) {
           setDonations(donRes.data || []);
+          setPayouts(payRes.data || []);
           setCampaigns(campRes.data || []);
           setRequests(reqRes.data || []);
           setProfiles(await fetchProfiles(reqRes.data || []));
@@ -194,10 +229,17 @@ export default function NgoDashboard() {
     setCampaigns(data || []);
   }
 
+  async function loadPayouts() {
+    if (!ngo) return;
+    const { data } = await supabase.from("donation_payouts").select("*").eq("ngo_id", ngo.id);
+    setPayouts(data || []);
+  }
+
   function reloadAll() {
     loadDonations();
     loadRequests();
     loadCampaigns();
+    loadPayouts();
   }
 
   async function handleSignOut() {
@@ -223,7 +265,10 @@ export default function NgoDashboard() {
   const totalRaised = donations.reduce((sum, d) => sum + Number(d.amount), 0);
   const completed = donations.filter((d) => d.stage === 5).length;
   const pendingReqCount = requests.filter((r) => r.status === "pending").length;
-  const verifiedRequests = requests.filter((r) => r.status === "verified");
+  const totals = payoutTotals(payouts);
+  const payoutOptions = openRequests(requests, totals.byRequest);
+  const leftToGive = (d) =>
+    d ? Math.max(0, Math.round((assignable(d) - (totals.byDonation[d.id] || 0)) * 100) / 100) : 0;
 
   const activeMenu = MENU.find((m) => m.id === view);
 
@@ -237,9 +282,19 @@ export default function NgoDashboard() {
         open={!!advanceRec}
         record={advanceRec}
         kind={advanceKind}
-        verifiedRequests={verifiedRequests}
+        payoutOptions={payoutOptions}
+        payoutLeft={advanceKind === "donation" ? leftToGive(advanceRec) : 0}
         onClose={() => setAdvanceRec(null)}
         onAdvanced={reloadAll}
+      />
+
+      <AssignPayoutModal
+        open={!!assignRec}
+        donation={assignRec}
+        left={leftToGive(assignRec)}
+        options={payoutOptions}
+        onClose={() => setAssignRec(null)}
+        onSaved={reloadAll}
       />
 
       <CampaignModal
@@ -384,6 +439,9 @@ export default function NgoDashboard() {
                   setAdvanceRec(rec);
                   setAdvanceKind(kind);
                 }}
+                totals={totals}
+                leftToGive={leftToGive}
+                onAssign={setAssignRec}
                 totalRaised={totalRaised}
                 completed={completed}
               />
@@ -457,6 +515,9 @@ function DonationsView({
   copied,
   copyLink,
   onAdvance,
+  totals,
+  leftToGive,
+  onAssign,
   totalRaised,
   completed,
 }) {
@@ -551,6 +612,7 @@ function DonationsView({
                       <div className="mt-2">
                         <StageBadge stage={r.stage} />
                       </div>
+                      <PayoutLine r={r} isBen={isBen} totals={totals} leftToGive={leftToGive} onAssign={onAssign} />
                     </div>
                     <div className="text-right">
                       <div className="font-bold text-zinc-900">${r.amount}</div>

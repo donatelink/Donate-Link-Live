@@ -42,6 +42,53 @@ function ProofLink({ url, label }) {
   );
 }
 
+function money(n) {
+  return `$${Number(n || 0).toFixed(2)}`;
+}
+
+// The beneficiaries this donation was split across, each with a transfer receipt.
+function PeopleHelped({ donation, payouts }) {
+  const net = Number(donation.net_amount ?? donation.amount);
+  const given = payouts.reduce((sum, p) => sum + Number(p.amount), 0);
+  const fee = Number(donation.amount) - net;
+  const count = new Set(payouts.map((p) => p.request?.beneficiary_name)).size;
+
+  return (
+    <div className="mt-4 rounded-2xl border border-zinc-200 bg-white p-4 sm:p-6">
+      <h2 className="text-base font-semibold text-zinc-900">
+        Your donation helped {count} {count === 1 ? "person" : "people"}
+      </h2>
+      <ul className="mt-3 divide-y divide-zinc-100">
+        {payouts.map((p) => (
+          <li key={p.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
+            <div className="min-w-0">
+              <p className="font-medium text-zinc-900">{p.request?.beneficiary_name || "Beneficiary"}</p>
+              {p.request?.reason && <p className="text-xs text-zinc-500 line-clamp-2">{p.request.reason}</p>}
+              <a
+                href={p.receipt_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-block text-xs font-semibold text-emerald-700 underline"
+              >
+                Transfer receipt · {fmtDate(p.created_at)}
+              </a>
+            </div>
+            <p className="font-bold text-emerald-600">{money(p.amount)}</p>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 border-t border-zinc-200 pt-3 text-sm font-semibold text-zinc-800">
+        {money(given)} of {money(net)} given{given >= net - 0.005 ? " ✅" : ` · ${money(net - given)} still with the NGO`}
+      </p>
+      {fee > 0.005 && (
+        <p className="text-xs text-zinc-500">
+          {money(donation.amount)} donated − {money(fee)} card processing fee paid by the NGO.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function fmtDate(iso) {
   if (!iso) return "";
   return new Date(iso).toLocaleDateString();
@@ -54,6 +101,7 @@ export default function TrackDonation() {
   const [updates, setUpdates] = useState([]);
   const [beneficiaryRequest, setBeneficiaryRequest] = useState(null);
   const [beneficiaryUpdates, setBeneficiaryUpdates] = useState([]);
+  const [payouts, setPayouts] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -69,6 +117,7 @@ export default function TrackDonation() {
       let ups = [];
       let benReq = null;
       let benUps = [];
+      let pays = [];
       if (don) {
         const promises = [
           supabase
@@ -76,6 +125,11 @@ export default function TrackDonation() {
             .select("*")
             .eq("donation_id", id)
             .order("stage", { ascending: true }),
+          supabase
+            .from("donation_payouts")
+            .select("id, amount, receipt_url, created_at, request:beneficiary_requests(beneficiary_name, reason)")
+            .eq("donation_id", id)
+            .order("created_at", { ascending: true }),
         ];
         if (don.beneficiary_request_id) {
           promises.push(
@@ -93,9 +147,10 @@ export default function TrackDonation() {
         }
         const results = await Promise.all(promises);
         ups = results[0].data || [];
+        pays = results[1].data || [];
         if (don.beneficiary_request_id) {
-          benReq = results[1].data || null;
-          benUps = results[2].data || [];
+          benReq = results[2].data || null;
+          benUps = results[3].data || [];
         }
       }
       if (active) {
@@ -103,6 +158,7 @@ export default function TrackDonation() {
         setUpdates(ups);
         setBeneficiaryRequest(benReq);
         setBeneficiaryUpdates(benUps);
+        setPayouts(pays);
         setLoading(false);
       }
     })();
@@ -258,6 +314,8 @@ export default function TrackDonation() {
                   </div>
                 )}
               </div>
+
+              {payouts.length > 0 && <PeopleHelped donation={donation} payouts={payouts} />}
 
               <div className="mt-4 rounded-2xl border border-zinc-200 bg-white p-4 sm:p-6">
                 <h2 className="text-base font-semibold text-zinc-900">Lifecycle & Proof</h2>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { PayoutRows, savePayouts, validateRows } from "@/components/PayoutEditor";
 import supabase from "@/utils/supabase";
 
 const STAGES = ["Pending", "Confirmed", "Allocated", "Transferred", "Completed"];
@@ -30,7 +31,8 @@ export default function StageAdvanceModal({
   open,
   record,
   kind = "donation",
-  verifiedRequests = [],
+  payoutOptions = [],
+  payoutLeft = 0,
   onClose,
   onAdvanced,
 }) {
@@ -38,7 +40,7 @@ export default function StageAdvanceModal({
   const [file, setFile] = useState(null);
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
-  const [beneficiaryRequestId, setBeneficiaryRequestId] = useState("");
+  const [rows, setRows] = useState([]);
 
   useEffect(() => {
     if (open) {
@@ -46,7 +48,7 @@ export default function StageAdvanceModal({
       setFile(null);
       setSaving(false);
       setErrorMsg("");
-      setBeneficiaryRequestId("");
+      setRows([]);
     }
   }, [open]);
 
@@ -56,7 +58,10 @@ export default function StageAdvanceModal({
   const nextStage = record.stage + 1;
   const nextLabel = STAGES[nextStage - 1];
   const stageDesc = isBeneficiary ? BENEFICIARY_DESC[nextStage] : DONATION_DESC[nextStage];
-  const proofRequired = nextStage === 4 || nextStage === 5;
+  // At Stage 4 a donation can be given to beneficiaries, each with its own
+  // transfer receipt; those receipts replace the single Stage 4 proof.
+  const givesToBeneficiaries = !isBeneficiary && nextStage === 4 && rows.length > 0;
+  const proofRequired = (nextStage === 4 || nextStage === 5) && !givesToBeneficiaries;
 
   async function handleSave() {
     setErrorMsg("");
@@ -64,6 +69,13 @@ export default function StageAdvanceModal({
     if (proofRequired && !file) {
       setErrorMsg("Please attach the required proof to advance to this stage.");
       return;
+    }
+    if (givesToBeneficiaries) {
+      const problem = validateRows(rows, payoutLeft, payoutOptions);
+      if (problem) {
+        setErrorMsg(problem);
+        return;
+      }
     }
 
     setSaving(true);
@@ -115,6 +127,17 @@ export default function StageAdvanceModal({
         return;
       }
     } else {
+      // Save the payouts first: if the database rejects them, nothing else changes.
+      if (givesToBeneficiaries) {
+        try {
+          await savePayouts(record, rows);
+        } catch (err) {
+          setErrorMsg(err.message);
+          setSaving(false);
+          return;
+        }
+      }
+
       const { error: insErr } = await supabase.from("donation_updates").insert({
         donation_id: record.id,
         stage: nextStage,
@@ -132,10 +155,6 @@ export default function StageAdvanceModal({
         note: note.trim() || record.note,
         updated_at: new Date().toISOString(),
       };
-      if (nextStage === 4 && beneficiaryRequestId) {
-        donationUpdate.beneficiary_request_id = beneficiaryRequestId;
-      }
-
       const { error: stageErr } = await supabase
         .from("donations")
         .update(donationUpdate)
@@ -144,18 +163,6 @@ export default function StageAdvanceModal({
         setErrorMsg(stageErr.message);
         setSaving(false);
         return;
-      }
-
-      if (nextStage === 4 && beneficiaryRequestId) {
-        const { error: reqErr } = await supabase
-          .from("beneficiary_requests")
-          .update({ status: "funded", updated_at: new Date().toISOString() })
-          .eq("id", beneficiaryRequestId);
-        if (reqErr) {
-          setErrorMsg(`Donation advanced, but failed to mark request funded: ${reqErr.message}`);
-          setSaving(false);
-          return;
-        }
       }
     }
 
@@ -234,27 +241,14 @@ export default function StageAdvanceModal({
 
           {!isBeneficiary && nextStage === 4 && (
             <div>
-              <label htmlFor="beneficiaryRequest" className="block text-sm font-medium text-zinc-700">
-                Link to a beneficiary payout? <span className="text-zinc-400">(optional)</span>
-              </label>
-              <select
-                id="beneficiaryRequest"
-                value={beneficiaryRequestId}
-                onChange={(e) => setBeneficiaryRequestId(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-black focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200"
-              >
-                <option value="">— Not linked to a beneficiary —</option>
-                {verifiedRequests.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {r.beneficiary_name} · ${r.amount}
-                  </option>
-                ))}
-              </select>
-              {verifiedRequests.length === 0 && (
-                <p className="mt-1 text-xs text-zinc-500">
-                  No verified beneficiary requests to link. Verify one to enable this.
-                </p>
-              )}
+              <p className="block text-sm font-medium text-zinc-700">
+                Give to beneficiaries <span className="text-zinc-400">(optional)</span>
+              </p>
+              <p className="mb-2 text-xs text-zinc-500">
+                Split this donation across one or more verified beneficiaries, each with their own
+                transfer receipt. Anything left can be given later.
+              </p>
+              <PayoutRows rows={rows} setRows={setRows} options={payoutOptions} left={payoutLeft} />
             </div>
           )}
 
