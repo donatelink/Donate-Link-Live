@@ -22,6 +22,7 @@ export default function NgoSettings() {
     website: "",
     contact_person: "",
     phone: "",
+    wallet_address: "",
   });
   const [logoUrl, setLogoUrl] = useState("");
   const [file, setFile] = useState(null);
@@ -61,6 +62,7 @@ export default function NgoSettings() {
           website: ngoRow.website || "",
           contact_person: ngoRow.contact_person || "",
           phone: ngoRow.phone || "",
+          wallet_address: ngoRow.wallet_address || "",
         });
         setLogoUrl(ngoRow.logo_url || "");
       }
@@ -86,6 +88,14 @@ export default function NgoSettings() {
     if (!ngo) return;
     setOkMsg("");
     setErrorMsg("");
+
+    // Catch a malformed wallet here rather than letting the DB constraint reject it.
+    const wallet = form.wallet_address.trim();
+    if (wallet && !/^0x[a-fA-F0-9]{40}$/.test(wallet)) {
+      setErrorMsg("Wallet address must be 0x followed by 40 hexadecimal characters.");
+      return;
+    }
+
     setSaving(true);
 
     let newLogoUrl = logoUrl;
@@ -113,6 +123,7 @@ export default function NgoSettings() {
         contact_person: form.contact_person.trim(),
         phone: form.phone.trim(),
         logo_url: newLogoUrl || null,
+        wallet_address: wallet || null,
       })
       .eq("id", ngo.id);
     if (ngoErr) {
@@ -318,6 +329,28 @@ export default function NgoSettings() {
                     placeholder="https://example.org"
                     className={inputClass}
                   />
+                </div>
+
+                <div>
+                  <label htmlFor="wallet_address" className="block text-sm font-medium text-zinc-700">
+                    Payout wallet address{" "}
+                    <span className="text-zinc-400">(for on-chain donations)</span>
+                  </label>
+                  <input
+                    id="wallet_address"
+                    type="text"
+                    value={form.wallet_address}
+                    onChange={(e) => update("wallet_address", e.target.value)}
+                    placeholder="0x0000000000000000000000000000000000000000"
+                    spellCheck={false}
+                    className={`${inputClass} font-mono text-sm`}
+                  />
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Donations paid on Polygon are sent straight to this wallet — DonateLink never
+                    holds the funds. Leave blank to accept card donations only.{" "}
+                    <strong>Double-check it:</strong> crypto sent to a wrong address cannot be
+                    recovered.
+                  </p>
                 </div>
 
                 <div>

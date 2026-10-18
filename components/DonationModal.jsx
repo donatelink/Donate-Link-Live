@@ -9,8 +9,15 @@ import {
   Utensils,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import FeeBreakdown, { calculateFees } from "./FeeBreakdown";
+import FeeBreakdown, { calculateFees, usdToPol } from "./FeeBreakdown";
 import supabase from "@/utils/supabase";
+import {
+  explorerTxUrl,
+  friendlyChainError,
+  hasMetaMask,
+  sendDonation,
+  shortAddress,
+} from "@/utils/chain";
 
 const DONATION_TYPES = [
   { id: "hunger-food", Icon: Utensils, name: "Hunger & Food Crisis", desc: "Meals & food parcels" },
@@ -26,9 +33,22 @@ const DONATION_TYPES = [
 const PRESET_AMOUNTS = [10, 25, 50, 100, 500];
 
 const PAYMENT_METHODS = [
-  { id: "stripe", emoji: "💳", label: "Card", desc: "Stripe → USDT" },
-  { id: "polygon", emoji: "⛓️", label: "Polygon", desc: "MetaMask · ~$0.01 gas" },
-  { id: "ethereum", emoji: "🔷", label: "Ethereum", desc: "MetaMask · variable gas" },
+  {
+    id: "polygon",
+    emoji: "⛓️",
+    label: "Polygon",
+    desc: "MetaMask · real on-chain transaction",
+    live: true,
+  },
+  { id: "stripe", emoji: "💳", label: "Card", desc: "Demo only — no real charge", live: false },
+  {
+    id: "ethereum",
+    emoji: "🔷",
+    label: "Ethereum",
+    desc: "Coming soon",
+    live: false,
+    disabled: true,
+  },
 ];
 
 const STEPS = ["Type", "Amount", "Payment", "Confirm"];
@@ -42,6 +62,8 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [done, setDone] = useState(false);
+  const [txHash, setTxHash] = useState("");
+  const [statusMsg, setStatusMsg] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -53,6 +75,8 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
     setSubmitting(false);
     setErrorMsg("");
     setDone(false);
+    setTxHash("");
+    setStatusMsg("");
   }, [open]);
 
   useEffect(() => {
@@ -80,6 +104,7 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
   async function handleSubmit() {
     setSubmitting(true);
     setErrorMsg("");
+    setStatusMsg("");
 
     const {
       data: { user },
@@ -92,27 +117,102 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
     }
 
     const typeLabel = DONATION_TYPES.find((t) => t.id === type)?.name || "Others";
+    const onChain = !!PAYMENT_METHODS.find((m) => m.id === method)?.live;
 
-    const { error } = await supabase.from("donations").insert({
-      donor_id: user.id,
-      ngo_id: ngo.id,
-      amount: finalAmount,
-      donation_type: typeLabel,
-      stage: 1,
-      donor_name: user.user_metadata?.name || user.email,
-      donor_email: user.email,
-      ngo_name: ngo.org_name,
-    });
+    // Fail fast on the things that would otherwise strand a transaction.
+    if (onChain) {
+      if (!ngo.wallet_address) {
+        setErrorMsg(
+          `${ngo.org_name} has not added a payout wallet yet, so on-chain donations to them are not possible. Choose Card, or contact the NGO.`
+        );
+        setSubmitting(false);
+        return;
+      }
+      if (!hasMetaMask()) {
+        setErrorMsg("MetaMask is required for on-chain donations. Install it from metamask.io.");
+        setSubmitting(false);
+        return;
+      }
+    }
 
-    setSubmitting(false);
+    // Write the record BEFORE any money moves, so a donation can never go
+    // on-chain without a matching row to reconcile against.
+    const { data: row, error: insertError } = await supabase
+      .from("donations")
+      .insert({
+        donor_id: user.id,
+        ngo_id: ngo.id,
+        amount: finalAmount,
+        donation_type: typeLabel,
+        stage: 1,
+        donor_name: user.user_metadata?.name || user.email,
+        donor_email: user.email,
+        ngo_name: ngo.org_name,
+        payment_method: method,
+        chain: onChain ? "polygon-amoy" : null,
+        onchain_status: onChain ? "pending" : null,
+      })
+      .select()
+      .single();
 
-    if (error) {
-      setErrorMsg(error.message);
+    if (insertError) {
+      setErrorMsg(insertError.message);
+      setSubmitting(false);
       return;
     }
 
-    setDone(true);
-    if (onDonated) onDonated();
+    if (!onChain) {
+      setSubmitting(false);
+      setDone(true);
+      if (onDonated) onDonated();
+      return;
+    }
+
+    try {
+      setStatusMsg("Confirm the transaction in MetaMask…");
+      const result = await sendDonation({
+        ngoWallet: ngo.wallet_address,
+        ngoId: ngo.id,
+        cause: typeLabel,
+        amountPol: usdToPol(finalAmount).toFixed(6),
+      });
+
+      setStatusMsg("Transaction confirmed. Saving…");
+
+      // Payment is proven on-chain, so the donation moves to Stage 2 (Confirmed).
+      const { error: updateError } = await supabase
+        .from("donations")
+        .update({
+          tx_hash: result.hash,
+          from_address: result.from,
+          contract_address: result.contractAddress,
+          onchain_donation_id: result.onchainId,
+          onchain_status: "confirmed",
+          stage: 2,
+        })
+        .eq("id", row.id);
+
+      setTxHash(result.hash);
+      setStatusMsg("");
+      setSubmitting(false);
+
+      if (updateError) {
+        // The money DID move — surface the hash so it can never be lost.
+        setErrorMsg(
+          `Your transaction succeeded but saving it failed: ${updateError.message}. Keep the transaction hash below and contact support.`
+        );
+        return;
+      }
+
+      setDone(true);
+      if (onDonated) onDonated();
+    } catch (err) {
+      // Nothing moved on-chain — mark the row so it is not mistaken for a real donation.
+      await supabase.from("donations").update({ onchain_status: "failed" }).eq("id", row.id);
+      setErrorMsg(friendlyChainError(err));
+      setStatusMsg("");
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -129,12 +229,33 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-3xl">
               ✅
             </div>
-            <h2 className="mt-4 text-xl font-bold text-zinc-900">Donation submitted</h2>
+            <h2 className="mt-4 text-xl font-bold text-zinc-900">
+              {txHash ? "Donation confirmed on-chain" : "Donation submitted"}
+            </h2>
             <p className="mt-2 text-sm text-zinc-600">
               Your ${finalAmount.toFixed(2)} donation to{" "}
               <span className="font-semibold">{ngo.org_name}</span> is now at{" "}
-              <span className="font-semibold">Stage 1 — Pending</span>. Track it from your dashboard.
+              <span className="font-semibold">
+                {txHash ? "Stage 2 — Confirmed" : "Stage 1 — Pending"}
+              </span>
+              . Track it from your dashboard.
             </p>
+            {txHash && (
+              <div className="mx-auto mt-4 max-w-sm rounded-lg border border-emerald-200 bg-emerald-50/50 px-4 py-3 text-left">
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                  Transaction hash
+                </p>
+                <p className="mt-1 break-all font-mono text-xs text-zinc-700">{txHash}</p>
+                <a
+                  href={explorerTxUrl(txHash)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 inline-block text-xs font-semibold text-emerald-700 underline hover:text-emerald-800"
+                >
+                  Verify on PolygonScan →
+                </a>
+              </div>
+            )}
             <button
               onClick={onClose}
               className="mt-6 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
@@ -151,6 +272,12 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
                   {errorMsg}
                 </div>
               )}
+              {statusMsg && (
+                <div className="mb-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                  <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-emerald-600 border-t-transparent" />
+                  {statusMsg}
+                </div>
+              )}
               {step === 0 && <StepType type={type} setType={setType} />}
               {step === 1 && (
                 <StepAmount
@@ -161,7 +288,12 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
                 />
               )}
               {step === 2 && (
-                <StepPayment method={method} setMethod={setMethod} amount={finalAmount} />
+                <StepPayment
+                  method={method}
+                  setMethod={setMethod}
+                  amount={finalAmount}
+                  ngo={ngo}
+                />
               )}
               {step === 3 && (
                 <StepConfirm
@@ -169,6 +301,7 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
                   type={type}
                   amount={finalAmount}
                   method={method}
+                  ngo={ngo}
                 />
               )}
             </div>
@@ -330,47 +463,81 @@ function StepAmount({ amount, setAmount, customAmount, setCustomAmount }) {
   );
 }
 
-function StepPayment({ method, setMethod, amount }) {
+function StepPayment({ method, setMethod, amount, ngo }) {
+  const selected = PAYMENT_METHODS.find((m) => m.id === method);
+  const needsWallet = selected?.live && !ngo?.wallet_address;
+
   return (
     <div className="space-y-4">
       <div>
         <h3 className="text-sm font-semibold text-zinc-900">Payment Method</h3>
-        <p className="text-xs text-zinc-500">All methods settle in USDT (stable, Shariah compliant — no Gharar).</p>
+        <p className="text-xs text-zinc-500">
+          Polygon sends a real transaction from your own wallet, recorded on-chain for anyone to
+          verify.
+        </p>
         <div className="mt-3 space-y-2">
           {PAYMENT_METHODS.map((m) => (
             <button
               key={m.id}
-              onClick={() => setMethod(m.id)}
+              disabled={m.disabled}
+              onClick={() => !m.disabled && setMethod(m.id)}
               className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition ${
-                method === m.id
-                  ? "border-emerald-500 bg-emerald-50"
-                  : "border-zinc-200 bg-white hover:border-zinc-300"
+                m.disabled
+                  ? "cursor-not-allowed border-zinc-200 bg-zinc-50 opacity-60"
+                  : method === m.id
+                    ? "border-emerald-500 bg-emerald-50"
+                    : "border-zinc-200 bg-white hover:border-zinc-300"
               }`}
             >
               <span className="text-2xl">{m.emoji}</span>
               <div className="flex-1">
-                <div className="text-sm font-semibold text-zinc-900">{m.label}</div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-zinc-900">{m.label}</span>
+                  {m.live && (
+                    <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                      On-chain
+                    </span>
+                  )}
+                </div>
                 <div className="text-xs text-zinc-500">{m.desc}</div>
               </div>
-              <div
-                className={`h-4 w-4 rounded-full border-2 ${
-                  method === m.id ? "border-emerald-600 bg-emerald-600" : "border-zinc-300"
-                }`}
-              />
+              {!m.disabled && (
+                <div
+                  className={`h-4 w-4 rounded-full border-2 ${
+                    method === m.id ? "border-emerald-600 bg-emerald-600" : "border-zinc-300"
+                  }`}
+                />
+              )}
             </button>
           ))}
         </div>
       </div>
+
+      {needsWallet && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {ngo?.org_name} has not added a payout wallet yet, so they cannot receive on-chain
+          donations. Pick Card instead, or come back once they have.
+        </div>
+      )}
+
+      {selected?.live && ngo?.wallet_address && (
+        <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-600">
+          Funds go straight to {ngo.org_name}&apos;s wallet{" "}
+          <span className="font-mono text-zinc-800">{shortAddress(ngo.wallet_address)}</span>. You
+          will need MetaMask on the Polygon Amoy network.
+        </div>
+      )}
 
       <FeeBreakdown amount={amount} method={method} />
     </div>
   );
 }
 
-function StepConfirm({ ngoName, type, amount, method }) {
+function StepConfirm({ ngoName, type, amount, method, ngo }) {
   const typeLabel = DONATION_TYPES.find((t) => t.id === type)?.name || type;
-  const methodLabel = PAYMENT_METHODS.find((m) => m.id === method)?.label || method;
-  const { total } = calculateFees(amount, method);
+  const selected = PAYMENT_METHODS.find((m) => m.id === method);
+  const methodLabel = selected?.label || method;
+  const { total, onchain, amountPol } = calculateFees(amount, method);
 
   return (
     <div>
@@ -382,12 +549,32 @@ function StepConfirm({ ngoName, type, amount, method }) {
         <Summary label="Type" value={typeLabel} />
         <Summary label="Amount" value={`$${amount.toFixed(2)}`} />
         <Summary label="Payment" value={methodLabel} />
-        <Summary label="Total charge" value={`$${total.toFixed(2)}`} highlight />
+        {onchain ? (
+          <>
+            <Summary label="Sending" value={`${amountPol.toFixed(4)} POL`} />
+            <Summary label="To wallet" value={shortAddress(ngo?.wallet_address)} />
+            <Summary label="Network" value="Polygon Amoy" highlight />
+          </>
+        ) : (
+          <Summary label="Total charge" value={`$${total.toFixed(2)}`} highlight />
+        )}
       </dl>
 
       <p className="mt-4 text-xs text-zinc-500">
-        By clicking <strong>Donate Now</strong>, your donation enters <strong>Stage 1: Pending</strong> and
-        the NGO will update its progress through all 5 stages.
+        {onchain ? (
+          <>
+            Clicking <strong>Donate Now</strong> opens MetaMask to sign a real transaction. Once it
+            confirms, your donation is recorded on-chain and enters{" "}
+            <strong>Stage 2: Confirmed</strong>; the NGO then advances it through the remaining
+            stages with proof.
+          </>
+        ) : (
+          <>
+            By clicking <strong>Donate Now</strong>, your donation enters{" "}
+            <strong>Stage 1: Pending</strong> and the NGO will update its progress through all 5
+            stages.
+          </>
+        )}
       </p>
     </div>
   );

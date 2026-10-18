@@ -1,19 +1,43 @@
+// Demo conversion rate for the testnet. Amoy POL has no market value, so this is
+// a fixed stand-in that keeps the app's USD amounts meaningful while still
+// sending a real on-chain value. Mainnet would read a live Chainlink POL/USD feed.
+export const POL_USD_RATE = 0.4;
+export const IS_TESTNET = true;
+
+// Rough gas cost of a donate() call on Amoy, in POL. Amoy gas is effectively free.
+const ESTIMATED_GAS_POL = 0.005;
+
 const PAYMENT_FEES = {
-  stripe: { label: "Card (Stripe → USDT)", percent: 0.029, flat: 0.3, network: "Polygon" },
-  polygon: { label: "USDT on Polygon", percent: 0, flat: 0.01, network: "Polygon" },
-  ethereum: { label: "USDT on Ethereum", percent: 0, flat: 2.5, network: "Ethereum" },
+  stripe: { label: "Card (Stripe)", percent: 0.029, flat: 0.3, network: "Off-chain", onchain: false },
+  polygon: { label: "POL on Polygon Amoy", percent: 0, flat: 0, network: "Polygon Amoy", onchain: true },
+  ethereum: { label: "Ethereum", percent: 0, flat: 0, network: "Ethereum", onchain: false },
 };
+
+export function usdToPol(usd) {
+  return usd / POL_USD_RATE;
+}
 
 export function calculateFees(amount, method) {
   const f = PAYMENT_FEES[method];
   const processing = amount * f.percent + f.flat;
   const total = amount + processing;
-  return { processing, total, network: f.network, label: f.label };
+  return {
+    processing,
+    total,
+    network: f.network,
+    label: f.label,
+    onchain: f.onchain,
+    amountPol: f.onchain ? usdToPol(amount) : null,
+    gasPol: f.onchain ? ESTIMATED_GAS_POL : null,
+  };
 }
 
 export default function FeeBreakdown({ amount, method }) {
   if (!amount || amount <= 0) return null;
-  const { processing, total, network, label } = calculateFees(amount, method);
+  const { processing, total, network, label, onchain, amountPol, gasPol } = calculateFees(
+    amount,
+    method
+  );
 
   return (
     <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
@@ -25,15 +49,43 @@ export default function FeeBreakdown({ amount, method }) {
       </div>
       <dl className="space-y-2 text-sm">
         <Row label="Donation amount" value={`$${amount.toFixed(2)}`} />
-        <Row label={`Processing (${label})`} value={`$${processing.toFixed(2)}`} muted />
-        <Row label="Blockchain network" value={network} muted />
-        <div className="border-t border-emerald-200 pt-2">
-          <Row label="You pay" value={`$${total.toFixed(2)}`} bold />
-        </div>
+        {onchain ? (
+          <>
+            <Row label="You send on-chain" value={`${amountPol.toFixed(4)} POL`} muted />
+            <Row label="Estimated gas" value={`~${gasPol} POL`} muted />
+            <Row label="Platform fee" value="$0.00" muted />
+            <Row label="Network" value={network} muted />
+            <div className="border-t border-emerald-200 pt-2">
+              <Row label="NGO receives" value={`${amountPol.toFixed(4)} POL (100%)`} bold />
+            </div>
+          </>
+        ) : (
+          <>
+            <Row label={`Processing (${label})`} value={`$${processing.toFixed(2)}`} muted />
+            <Row label="Settlement" value={network} muted />
+            <div className="border-t border-emerald-200 pt-2">
+              <Row label="You pay" value={`$${total.toFixed(2)}`} bold />
+            </div>
+          </>
+        )}
       </dl>
-      <p className="mt-3 text-xs text-emerald-700">
-        All fees disclosed upfront per Shariah Ujrah principle. No hidden charges, no Riba.
-      </p>
+      {onchain ? (
+        <p className="mt-3 text-xs text-emerald-700">
+          The smart contract takes no cut — the full amount goes straight to the NGO&apos;s wallet, and
+          the transaction is publicly verifiable.
+          {IS_TESTNET && (
+            <>
+              {" "}
+              Testnet demo at a fixed rate of ${POL_USD_RATE.toFixed(2)}/POL; Amoy POL has no real
+              value.
+            </>
+          )}
+        </p>
+      ) : (
+        <p className="mt-3 text-xs text-emerald-700">
+          All fees disclosed upfront per Shariah Ujrah principle. No hidden charges, no Riba.
+        </p>
+      )}
     </div>
   );
 }

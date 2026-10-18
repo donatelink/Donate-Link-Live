@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import supabase from "@/utils/supabase";
+import { explorerTxUrl } from "@/utils/chain";
 
 const STAGES = [
   { num: 1, emoji: "⏳", title: "Pending", desc: "Donation initiated" },
@@ -156,6 +157,62 @@ export default function TrackDonation() {
                   </div>
                 </div>
                 <p className="mt-3 break-all font-mono text-xs text-zinc-400">ID: {donation.id}</p>
+
+                {donation.tx_hash && (
+                  <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">⛓️</span>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                        Verified on the blockchain
+                      </p>
+                    </div>
+                    <p className="mt-2 text-xs text-zinc-600">
+                      This donation was paid on-chain. The record below is public and permanent —
+                      neither the NGO nor DonateLink can alter it.
+                    </p>
+                    <dl className="mt-3 space-y-1.5 text-xs">
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <dt className="text-zinc-500">Transaction</dt>
+                        <dd className="break-all font-mono text-zinc-800">{donation.tx_hash}</dd>
+                      </div>
+                      {donation.from_address && (
+                        <div className="flex flex-wrap justify-between gap-2">
+                          <dt className="text-zinc-500">From wallet</dt>
+                          <dd className="break-all font-mono text-zinc-800">
+                            {donation.from_address}
+                          </dd>
+                        </div>
+                      )}
+                      {donation.onchain_donation_id != null && (
+                        <div className="flex flex-wrap justify-between gap-2">
+                          <dt className="text-zinc-500">On-chain ID</dt>
+                          <dd className="font-mono text-zinc-800">
+                            #{donation.onchain_donation_id}
+                          </dd>
+                        </div>
+                      )}
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <dt className="text-zinc-500">Network</dt>
+                        <dd className="text-zinc-800">Polygon Amoy</dd>
+                      </div>
+                    </dl>
+                    <a
+                      href={explorerTxUrl(donation.tx_hash)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-3 inline-block text-xs font-semibold text-emerald-700 underline hover:text-emerald-800"
+                    >
+                      Verify on PolygonScan →
+                    </a>
+                  </div>
+                )}
+
+                {donation.onchain_status === "failed" && (
+                  <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
+                    The on-chain transaction for this donation did not go through, so no funds were
+                    sent. You can safely donate again.
+                  </div>
+                )}
               </div>
 
               <div className="mt-4 rounded-2xl border border-zinc-200 bg-white p-4 sm:p-6">

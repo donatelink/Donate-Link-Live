@@ -1,0 +1,17 @@
+{
+  "name": "donatelink-contracts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DonateLink smart contracts — on-chain donation registry (Polygon Amoy)",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy:amoy": "hardhat run scripts/deploy.js --network amoy",
+    "deploy:local": "hardhat run scripts/deploy.js"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "dotenv": "^17.4.2",
+    "hardhat": "^2.29.1"
+  }
+}
