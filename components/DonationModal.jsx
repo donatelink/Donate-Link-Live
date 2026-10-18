@@ -40,7 +40,13 @@ const PAYMENT_METHODS = [
     desc: "MetaMask · real on-chain transaction",
     live: true,
   },
-  { id: "stripe", emoji: "💳", label: "Card", desc: "Demo only — no real charge", live: false },
+  {
+    id: "stripe",
+    emoji: "💳",
+    label: "Card",
+    desc: "Visa / Mastercard · secure Stripe checkout (test mode)",
+    live: false,
+  },
   {
     id: "ethereum",
     emoji: "🔷",
@@ -135,6 +141,14 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
       }
     }
 
+    if (method === "stripe" && !ngo.stripe_charges_enabled) {
+      setErrorMsg(
+        `${ngo.org_name} has not connected a Stripe account yet, so card donations to them are not possible.`
+      );
+      setSubmitting(false);
+      return;
+    }
+
     // Write the record BEFORE any money moves, so a donation can never go
     // on-chain without a matching row to reconcile against.
     const { data: row, error: insertError } = await supabase
@@ -158,6 +172,32 @@ export default function DonationModal({ open, onClose, ngo, onDonated }) {
     if (insertError) {
       setErrorMsg(insertError.message);
       setSubmitting(false);
+      return;
+    }
+
+    if (method === "stripe") {
+      // Hand over to Stripe's hosted checkout. The donation is confirmed when
+      // Stripe reports the payment, never by this page.
+      setStatusMsg("Opening secure card checkout…");
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const res = await fetch("/api/stripe/create-checkout-session", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({ donationId: row.id }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.url) {
+        setErrorMsg(body.error || "Could not start the card payment. Please try again.");
+        setStatusMsg("");
+        setSubmitting(false);
+        return;
+      }
+      window.location.assign(body.url);
       return;
     }
 
@@ -466,6 +506,7 @@ function StepAmount({ amount, setAmount, customAmount, setCustomAmount }) {
 function StepPayment({ method, setMethod, amount, ngo }) {
   const selected = PAYMENT_METHODS.find((m) => m.id === method);
   const needsWallet = selected?.live && !ngo?.wallet_address;
+  const needsStripe = method === "stripe" && !ngo?.stripe_charges_enabled;
 
   return (
     <div className="space-y-4">
@@ -520,6 +561,20 @@ function StepPayment({ method, setMethod, amount, ngo }) {
         </div>
       )}
 
+      {needsStripe && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {ngo?.org_name} has not connected a Stripe account yet, so they cannot receive card
+          donations. Pick Polygon instead, or come back once they have.
+        </div>
+      )}
+
+      {method === "stripe" && !needsStripe && (
+        <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-600">
+          Your card payment goes straight to {ngo.org_name}&apos;s own Stripe account — DonateLink
+          never holds the funds. Card details are entered on Stripe&apos;s secure page, never here.
+        </div>
+      )}
+
       {selected?.live && ngo?.wallet_address && (
         <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-600">
           Funds go straight to {ngo.org_name}&apos;s wallet{" "}
@@ -537,7 +592,7 @@ function StepConfirm({ ngoName, type, amount, method, ngo }) {
   const typeLabel = DONATION_TYPES.find((t) => t.id === type)?.name || type;
   const selected = PAYMENT_METHODS.find((m) => m.id === method);
   const methodLabel = selected?.label || method;
-  const { total, onchain, amountPol } = calculateFees(amount, method);
+  const { total, onchain, amountPol, processing, ngoReceives } = calculateFees(amount, method);
 
   return (
     <div>
@@ -556,7 +611,15 @@ function StepConfirm({ ngoName, type, amount, method, ngo }) {
             <Summary label="Network" value="Polygon Amoy" highlight />
           </>
         ) : (
-          <Summary label="Total charge" value={`$${total.toFixed(2)}`} highlight />
+          <>
+            <Summary label="Total charge" value={`$${total.toFixed(2)}`} highlight />
+            {method === "stripe" && (
+              <Summary
+                label="NGO receives"
+                value={`$${ngoReceives.toFixed(2)} (after $${processing.toFixed(2)} card fee)`}
+              />
+            )}
+          </>
         )}
       </dl>
 
@@ -566,6 +629,13 @@ function StepConfirm({ ngoName, type, amount, method, ngo }) {
             Clicking <strong>Donate Now</strong> opens MetaMask to sign a real transaction. Once it
             confirms, your donation is recorded on-chain and enters{" "}
             <strong>Stage 2: Confirmed</strong>; the NGO then advances it through the remaining
+            stages with proof.
+          </>
+        ) : method === "stripe" ? (
+          <>
+            Clicking <strong>Donate Now</strong> takes you to Stripe&apos;s secure checkout. Once
+            your card is charged, the donation enters <strong>Stage 2: Confirmed</strong> and the
+            money is paid straight to {ngoName}; the NGO then advances it through the remaining
             stages with proof.
           </>
         ) : (

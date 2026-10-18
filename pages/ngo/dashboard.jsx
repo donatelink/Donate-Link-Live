@@ -40,6 +40,13 @@ async function fetchProfiles(reqList) {
   return map;
 }
 
+// A donation whose payment hasn't cleared must not be advanced by hand.
+function unpaidLabel(d) {
+  if (d.payment_status === "pending" || d.onchain_status === "pending") return "Awaiting payment";
+  if (d.payment_status === "failed" || d.onchain_status === "failed") return "Payment failed";
+  return null;
+}
+
 function StageBadge({ stage }) {
   return (
     <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">
@@ -490,7 +497,11 @@ function DonationsView({
                     </div>
                     <div className="text-right">
                       <div className="font-bold text-zinc-900">${r.amount}</div>
-                      {r.stage < 5 ? (
+                      {!isBen && unpaidLabel(r) ? (
+                        <span className="mt-2 inline-block text-xs font-semibold text-amber-600">
+                          {unpaidLabel(r)}
+                        </span>
+                      ) : r.stage < 5 ? (
                         <button
                           onClick={() => onAdvance(r, r._kind)}
                           className="mt-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"

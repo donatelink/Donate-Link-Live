@@ -207,6 +207,45 @@ export default function TrackDonation() {
                   </div>
                 )}
 
+                {donation.payment_method === "stripe" && donation.payment_status === "paid" && (
+                  <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50/50 p-4">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">💳</span>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                        Paid by card · Stripe
+                      </p>
+                    </div>
+                    <p className="mt-2 text-xs text-zinc-600">
+                      Your card payment was confirmed by Stripe and paid straight to{" "}
+                      {donation.ngo_name}&apos;s own Stripe account — DonateLink never held the funds.
+                    </p>
+                    {donation.stripe_payment_intent && (
+                      <dl className="mt-3 space-y-1.5 text-xs">
+                        <div className="flex flex-wrap justify-between gap-2">
+                          <dt className="text-zinc-500">Payment reference</dt>
+                          <dd className="break-all font-mono text-zinc-800">
+                            {donation.stripe_payment_intent}
+                          </dd>
+                        </div>
+                      </dl>
+                    )}
+                  </div>
+                )}
+
+                {donation.payment_status === "pending" && (
+                  <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                    This card payment has not been completed yet. It will move to Stage 2 as soon as
+                    Stripe confirms it.
+                  </div>
+                )}
+
+                {donation.payment_status === "failed" && (
+                  <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
+                    The card payment for this donation was not completed, so you were not charged.
+                    You can safely donate again.
+                  </div>
+                )}
+
                 {donation.onchain_status === "failed" && (
                   <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
                     The on-chain transaction for this donation did not go through, so no funds were

@@ -8,7 +8,7 @@ export const IS_TESTNET = true;
 const ESTIMATED_GAS_POL = 0.005;
 
 const PAYMENT_FEES = {
-  stripe: { label: "Card (Stripe)", percent: 0.029, flat: 0.3, network: "Off-chain", onchain: false },
+  stripe: { label: "Card (Stripe)", percent: 0.029, flat: 0.3, network: "Stripe → NGO account", onchain: false },
   polygon: { label: "POL on Polygon Amoy", percent: 0, flat: 0, network: "Polygon Amoy", onchain: true },
   ethereum: { label: "Ethereum", percent: 0, flat: 0, network: "Ethereum", onchain: false },
 };
@@ -17,13 +17,15 @@ export function usdToPol(usd) {
   return usd / POL_USD_RATE;
 }
 
+// The donor pays exactly the donation amount. Any card processing fee is
+// deducted from what the NGO receives, never added on top for the donor.
 export function calculateFees(amount, method) {
   const f = PAYMENT_FEES[method];
-  const processing = amount * f.percent + f.flat;
-  const total = amount + processing;
+  const processing = Math.round((amount * f.percent + f.flat) * 100) / 100;
   return {
     processing,
-    total,
+    total: amount,
+    ngoReceives: Math.max(0, Math.round((amount - processing) * 100) / 100),
     network: f.network,
     label: f.label,
     onchain: f.onchain,
@@ -34,7 +36,7 @@ export function calculateFees(amount, method) {
 
 export default function FeeBreakdown({ amount, method }) {
   if (!amount || amount <= 0) return null;
-  const { processing, total, network, label, onchain, amountPol, gasPol } = calculateFees(
+  const { processing, total, ngoReceives, network, label, onchain, amountPol, gasPol } = calculateFees(
     amount,
     method
   );
@@ -61,10 +63,15 @@ export default function FeeBreakdown({ amount, method }) {
           </>
         ) : (
           <>
-            <Row label={`Processing (${label})`} value={`$${processing.toFixed(2)}`} muted />
+            <Row label="You pay" value={`$${total.toFixed(2)}`} bold />
+            <Row
+              label={`Processing (${label}), paid by NGO`}
+              value={`−$${processing.toFixed(2)}`}
+              muted
+            />
             <Row label="Settlement" value={network} muted />
             <div className="border-t border-emerald-200 pt-2">
-              <Row label="You pay" value={`$${total.toFixed(2)}`} bold />
+              <Row label="NGO receives" value={`$${ngoReceives.toFixed(2)}`} bold />
             </div>
           </>
         )}
@@ -83,7 +90,9 @@ export default function FeeBreakdown({ amount, method }) {
         </p>
       ) : (
         <p className="mt-3 text-xs text-emerald-700">
-          All fees disclosed upfront per Shariah Ujrah principle. No hidden charges, no Riba.
+          All fees disclosed upfront per Shariah Ujrah principle. No hidden charges, no Riba. You pay
+          only your donation; Stripe&apos;s card fee is deducted from the NGO&apos;s share, and
+          DonateLink takes no commission.
         </p>
       )}
     </div>

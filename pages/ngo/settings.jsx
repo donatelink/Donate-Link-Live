@@ -31,6 +31,8 @@ export default function NgoSettings() {
   const [saving, setSaving] = useState(false);
   const [okMsg, setOkMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  const [stripeInfo, setStripeInfo] = useState({ connected: false, chargesEnabled: false });
+  const [stripeBusy, setStripeBusy] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -65,6 +67,13 @@ export default function NgoSettings() {
           wallet_address: ngoRow.wallet_address || "",
         });
         setLogoUrl(ngoRow.logo_url || "");
+        setStripeInfo({
+          connected: !!ngoRow.stripe_account_id,
+          chargesEnabled: !!ngoRow.stripe_charges_enabled,
+        });
+        // Re-check with Stripe whenever an account exists, so finishing
+        // onboarding (and coming back here) is reflected right away.
+        if (ngoRow.stripe_account_id) refreshStripe(session.access_token);
       }
       setLoading(false);
     })();
@@ -72,6 +81,44 @@ export default function NgoSettings() {
       active = false;
     };
   }, [router]);
+
+  async function callStripe(action, token) {
+    if (!token) {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      token = session?.access_token;
+    }
+    const res = await fetch("/api/stripe/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || "Stripe request failed");
+    return body;
+  }
+
+  async function refreshStripe(token) {
+    try {
+      const info = await callStripe("status", token);
+      setStripeInfo(info);
+    } catch (err) {
+      setErrorMsg(err.message);
+    }
+  }
+
+  async function connectStripe() {
+    setStripeBusy(true);
+    setErrorMsg("");
+    try {
+      const { url } = await callStripe("onboard");
+      window.location.assign(url);
+    } catch (err) {
+      setErrorMsg(err.message);
+      setStripeBusy(false);
+    }
+  }
 
   function update(key, value) {
     setForm((p) => ({ ...p, [key]: value }));
@@ -350,6 +397,40 @@ export default function NgoSettings() {
                     holds the funds. Leave blank to accept card donations only.{" "}
                     <strong>Double-check it:</strong> crypto sent to a wrong address cannot be
                     recovered.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700">
+                    Card payouts <span className="text-zinc-400">(Stripe)</span>
+                  </label>
+                  <div className="mt-1 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-300 px-3 py-2.5">
+                    <span className="text-sm text-zinc-700">
+                      {stripeInfo.chargesEnabled
+                        ? "✓ Connected — accepting card donations"
+                        : stripeInfo.connected
+                          ? "Setup not finished"
+                          : "Not connected"}
+                    </span>
+                    {!stripeInfo.chargesEnabled && (
+                      <button
+                        type="button"
+                        onClick={connectStripe}
+                        disabled={stripeBusy}
+                        className="rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-white hover:enabled:bg-zinc-700 disabled:opacity-60"
+                      >
+                        {stripeBusy
+                          ? "Opening Stripe…"
+                          : stripeInfo.connected
+                            ? "Finish Stripe setup"
+                            : "Connect Stripe"}
+                      </button>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    Card donations are paid straight into your own Stripe account — DonateLink never
+                    holds the funds. Setup happens on Stripe&apos;s secure page; in test mode use
+                    Stripe&apos;s test data, no real documents.
                   </p>
                 </div>
 
