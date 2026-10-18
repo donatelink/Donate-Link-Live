@@ -1,10 +1,9 @@
 -- DonateLink — fundraising campaigns (FYP-2)
--- Run this in the Supabase SQL Editor, AFTER cause_pools.sql. Safe to re-run.
+-- Run this in the Supabase SQL Editor, AFTER stripe.sql. Safe to re-run.
 --
 -- An NGO asks for a fixed amount ("$5,000 for school supplies"). Donors give
 -- small amounts; once paid donations reach the goal the campaign closes on its
--- own. Campaign money is ring-fenced: it forms its own pool and can only be
--- spent on that campaign.
+-- own.
 
 -- ───────────────────────────────────────────────────────────── 1. Tables
 create table if not exists public.campaigns (
@@ -29,16 +28,15 @@ alter table public.donations
   add column if not exists campaign_id uuid references public.campaigns(id) on delete set null;
 create index if not exists donations_campaign_idx on public.donations (campaign_id);
 
-alter table public.ngo_expenses
-  add column if not exists campaign_id uuid references public.campaigns(id) on delete set null;
-
 -- ───────────────────────────────────────────────────────────── 2. Creating a campaign
 create or replace function public.campaigns_before_insert()
 returns trigger
 language plpgsql
 as $$
 begin
-  if auth.uid() is not null and not public.is_my_ngo(new.ngo_id) then
+  if auth.uid() is not null and not exists (
+    select 1 from public.ngos where id = new.ngo_id and user_id = auth.uid()
+  ) then
     raise exception 'You can only create campaigns for your own NGO';
   end if;
   new.title := trim(new.title);
@@ -65,7 +63,9 @@ create policy "anyone views campaigns" on public.campaigns
 
 drop policy if exists "ngo creates campaigns" on public.campaigns;
 create policy "ngo creates campaigns" on public.campaigns
-  for insert with check (public.is_my_ngo(ngo_id));
+  for insert with check (
+    exists (select 1 from public.ngos where id = ngo_id and user_id = auth.uid())
+  );
 -- No update/delete policies: progress is maintained by triggers, and closing
 -- goes through close_campaign() below.
 
@@ -185,7 +185,9 @@ declare
   c public.campaigns%rowtype;
 begin
   select * into c from public.campaigns where id = p_campaign;
-  if not found or not public.is_my_ngo(c.ngo_id) then
+  if not found or not exists (
+    select 1 from public.ngos where id = c.ngo_id and user_id = auth.uid()
+  ) then
     raise exception 'Campaign not found';
   end if;
   update public.campaigns
@@ -197,206 +199,7 @@ $$;
 revoke execute on function public.close_campaign(uuid) from public, anon;
 grant execute on function public.close_campaign(uuid) to authenticated;
 
--- ───────────────────────────────────────────────────────────── 4. Ring-fenced pools
--- Replaces the versions from cause_pools.sql. Spending with a campaign_id draws
--- only from that campaign's donations; spending without one draws only from the
--- general cause pool (donations that are not part of any campaign).
-create or replace function public.ngo_expenses_before_insert()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  req public.beneficiary_requests%rowtype;
-  c   public.campaigns%rowtype;
-begin
-  if auth.uid() is not null and not exists (
-    select 1 from public.ngos where id = new.ngo_id and user_id = auth.uid()
-  ) then
-    raise exception 'You can only record spending for your own NGO';
-  end if;
-
-  if new.campaign_id is not null then
-    select * into c from public.campaigns where id = new.campaign_id;
-    if not found or c.ngo_id <> new.ngo_id then
-      raise exception 'That campaign does not belong to your NGO';
-    end if;
-    new.cause := c.cause;
-  end if;
-
-  if new.beneficiary_request_id is not null then
-    select * into req from public.beneficiary_requests where id = new.beneficiary_request_id;
-    if not found or req.ngo_id <> new.ngo_id then
-      raise exception 'That beneficiary request does not belong to your NGO';
-    end if;
-    if req.status <> 'verified' or req.stage >= 4 then
-      raise exception 'Only a verified request that has not been paid yet can be paid from a pool';
-    end if;
-    new.amount := req.amount;
-  end if;
-
-  new.amount := round(new.amount, 2);
-  new.title := trim(new.title);
-  new.status := 'transferred';
-  new.delivery_proof_url := null;
-  new.completed_at := null;
-  new.created_at := now();
-  return new;
-end;
-$$;
-
-create or replace function public.ngo_expenses_allocate()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  remaining numeric := new.amount;
-  take      numeric;
-  d         record;
-  pool_name text;
-begin
-  for d in
-    select id, coalesce(net_amount, amount) - allocated_amount as free
-      from public.donations
-     where ngo_id = new.ngo_id
-       and (
-             (new.campaign_id is null and campaign_id is null and donation_type = new.cause)
-          or (new.campaign_id is not null and campaign_id = new.campaign_id)
-           )
-       and stage >= 2
-       and not manual_stages
-       and coalesce(payment_status, 'paid') = 'paid'
-       and coalesce(onchain_status, 'confirmed') = 'confirmed'
-       and allocated_amount < coalesce(net_amount, amount)
-     order by created_at, id
-     for update
-  loop
-    exit when remaining <= 0;
-    take := least(d.free, remaining);
-
-    insert into public.donation_allocations (donation_id, expense_id, amount)
-    values (d.id, new.id, take);
-
-    perform set_config('donatelink.system', 'on', true);
-    update public.donations
-       set allocated_amount = allocated_amount + take, updated_at = now()
-     where id = d.id;
-    perform set_config('donatelink.system', 'off', true);
-
-    remaining := remaining - take;
-  end loop;
-
-  if remaining > 0 then
-    if new.campaign_id is not null then
-      select 'campaign "' || title || '"' into pool_name from public.campaigns where id = new.campaign_id;
-    else
-      pool_name := new.cause || ' pool';
-    end if;
-    raise exception 'Not enough money in the % — short by $%', pool_name, round(remaining, 2);
-  end if;
-
-  for d in select donation_id from public.donation_allocations where expense_id = new.id loop
-    perform public.recompute_donation_stage(d.donation_id);
-  end loop;
-
-  if new.beneficiary_request_id is not null then
-    update public.beneficiary_requests
-       set stage = 4, status = 'funded', updated_at = now()
-     where id = new.beneficiary_request_id;
-    insert into public.beneficiary_request_updates (request_id, stage, note, proof_url)
-    values (new.beneficiary_request_id, 4,
-            'Paid from the ' || new.cause || ' pool: ' || new.title, new.receipt_url);
-  end if;
-
-  return new;
-end;
-$$;
-
--- Timeline note names the campaign for campaign donations.
-create or replace function public.recompute_donation_stage(d_id uuid)
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  d          public.donations%rowtype;
-  net        numeric;
-  all_done   boolean;
-  target     int;
-  s          int;
-  titles     text;
-  last_proof text;
-  source     text;
-begin
-  select * into d from public.donations where id = d_id for update;
-  if not found or d.manual_stages or d.allocated_amount <= 0 then
-    return;
-  end if;
-
-  net := coalesce(d.net_amount, d.amount);
-  if d.allocated_amount < net then
-    target := 3;
-  else
-    select bool_and(e.status = 'completed') into all_done
-      from public.donation_allocations a
-      join public.ngo_expenses e on e.id = a.expense_id
-     where a.donation_id = d_id;
-    target := case when all_done then 5 else 4 end;
-  end if;
-
-  if target <= d.stage then
-    return;
-  end if;
-
-  select string_agg(e.title, '; ' order by a.created_at) into titles
-    from public.donation_allocations a
-    join public.ngo_expenses e on e.id = a.expense_id
-   where a.donation_id = d_id;
-
-  if d.campaign_id is not null then
-    select 'campaign "' || title || '"' into source from public.campaigns where id = d.campaign_id;
-  else
-    source := d.donation_type || ' pool';
-  end if;
-
-  perform set_config('donatelink.system', 'on', true);
-
-  update public.donations set stage = target, updated_at = now() where id = d_id;
-
-  for s in (d.stage + 1) .. target loop
-    if s = 3 then
-      insert into public.donation_updates (donation_id, stage, note)
-      values (d_id, 3, 'Allocated from the ' || source || ' to: ' || titles);
-    elsif s = 4 then
-      select e.receipt_url into last_proof
-        from public.donation_allocations a
-        join public.ngo_expenses e on e.id = a.expense_id
-       where a.donation_id = d_id
-       order by a.created_at desc limit 1;
-      insert into public.donation_updates (donation_id, stage, note, proof_url)
-      values (d_id, 4, 'Your full donation has been spent: ' || titles, last_proof);
-    elsif s = 5 then
-      select e.delivery_proof_url into last_proof
-        from public.donation_allocations a
-        join public.ngo_expenses e on e.id = a.expense_id
-       where a.donation_id = d_id and e.delivery_proof_url is not null
-       order by e.completed_at desc nulls last limit 1;
-      insert into public.donation_updates (donation_id, stage, note, proof_url)
-      values (d_id, 5, 'Everything your donation funded has been delivered.', last_proof);
-    end if;
-  end loop;
-
-  perform set_config('donatelink.system', 'off', true);
-end;
-$$;
-
-revoke execute on function public.recompute_donation_stage(uuid) from public, anon, authenticated;
-
--- ───────────────────────────────────────────────────────────── 5. Lock the link
+-- ───────────────────────────────────────────────────────────── 4. Lock the link
 -- Once written, a donation's campaign cannot be changed from the browser, so
 -- money can't be moved between campaigns after the fact.
 create or replace function public.donations_campaign_lock()
@@ -404,9 +207,7 @@ returns trigger
 language plpgsql
 as $$
 begin
-  if auth.uid() is not null
-     and coalesce(current_setting('donatelink.system', true), '') <> 'on'
-     and new.campaign_id is distinct from old.campaign_id then
+  if auth.uid() is not null and new.campaign_id is distinct from old.campaign_id then
     raise exception 'A donation''s campaign cannot be changed';
   end if;
   return new;

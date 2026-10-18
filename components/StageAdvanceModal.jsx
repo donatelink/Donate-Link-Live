@@ -30,7 +30,7 @@ export default function StageAdvanceModal({
   open,
   record,
   kind = "donation",
-  onPayFromPool,
+  verifiedRequests = [],
   onClose,
   onAdvanced,
 }) {
@@ -38,6 +38,7 @@ export default function StageAdvanceModal({
   const [file, setFile] = useState(null);
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const [beneficiaryRequestId, setBeneficiaryRequestId] = useState("");
 
   useEffect(() => {
     if (open) {
@@ -45,6 +46,7 @@ export default function StageAdvanceModal({
       setFile(null);
       setSaving(false);
       setErrorMsg("");
+      setBeneficiaryRequestId("");
     }
   }, [open]);
 
@@ -55,9 +57,6 @@ export default function StageAdvanceModal({
   const nextLabel = STAGES[nextStage - 1];
   const stageDesc = isBeneficiary ? BENEFICIARY_DESC[nextStage] : DONATION_DESC[nextStage];
   const proofRequired = nextStage === 4 || nextStage === 5;
-  // A beneficiary payout reaches Stage 4 only by being paid from a cause pool,
-  // so the transfer receipt and the pool accounting are one and the same entry.
-  const payViaPool = isBeneficiary && nextStage === 4;
 
   async function handleSave() {
     setErrorMsg("");
@@ -133,6 +132,10 @@ export default function StageAdvanceModal({
         note: note.trim() || record.note,
         updated_at: new Date().toISOString(),
       };
+      if (nextStage === 4 && beneficiaryRequestId) {
+        donationUpdate.beneficiary_request_id = beneficiaryRequestId;
+      }
+
       const { error: stageErr } = await supabase
         .from("donations")
         .update(donationUpdate)
@@ -141,6 +144,18 @@ export default function StageAdvanceModal({
         setErrorMsg(stageErr.message);
         setSaving(false);
         return;
+      }
+
+      if (nextStage === 4 && beneficiaryRequestId) {
+        const { error: reqErr } = await supabase
+          .from("beneficiary_requests")
+          .update({ status: "funded", updated_at: new Date().toISOString() })
+          .eq("id", beneficiaryRequestId);
+        if (reqErr) {
+          setErrorMsg(`Donation advanced, but failed to mark request funded: ${reqErr.message}`);
+          setSaving(false);
+          return;
+        }
       }
     }
 
@@ -217,15 +232,33 @@ export default function StageAdvanceModal({
             />
           </div>
 
-          {payViaPool && (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
-              Pay this request from one of your cause pools. The transfer receipt you upload there
-              becomes this payout&apos;s Stage 4 proof, and the money is traced back to the
-              donations that funded it.
+          {!isBeneficiary && nextStage === 4 && (
+            <div>
+              <label htmlFor="beneficiaryRequest" className="block text-sm font-medium text-zinc-700">
+                Link to a beneficiary payout? <span className="text-zinc-400">(optional)</span>
+              </label>
+              <select
+                id="beneficiaryRequest"
+                value={beneficiaryRequestId}
+                onChange={(e) => setBeneficiaryRequestId(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-black focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200"
+              >
+                <option value="">— Not linked to a beneficiary —</option>
+                {verifiedRequests.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.beneficiary_name} · ${r.amount}
+                  </option>
+                ))}
+              </select>
+              {verifiedRequests.length === 0 && (
+                <p className="mt-1 text-xs text-zinc-500">
+                  No verified beneficiary requests to link. Verify one to enable this.
+                </p>
+              )}
             </div>
           )}
 
-          <div className={payViaPool ? "hidden" : ""}>
+          <div>
             <label className="block text-sm font-medium text-zinc-700">
               {proofLabelFor(nextStage)}{" "}
               {proofRequired ? (
@@ -264,25 +297,13 @@ export default function StageAdvanceModal({
           >
             Cancel
           </button>
-          {payViaPool ? (
-            <button
-              onClick={() => {
-                onClose();
-                if (onPayFromPool) onPayFromPool(record);
-              }}
-              className="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
-            >
-              Pay from a cause pool →
-            </button>
-          ) : (
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:enabled:bg-emerald-700 disabled:opacity-50"
-            >
-              {saving ? "Saving..." : `Advance to ${nextLabel}`}
-            </button>
-          )}
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:enabled:bg-emerald-700 disabled:opacity-50"
+          >
+            {saving ? "Saving..." : `Advance to ${nextLabel}`}
+          </button>
         </div>
       </div>
     </div>
