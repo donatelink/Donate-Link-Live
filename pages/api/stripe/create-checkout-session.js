@@ -89,6 +89,8 @@ export default async function handler(req, res) {
           transfer_data: { destination: ngo.stripe_account_id },
           metadata: { donation_id: donation.id },
         },
+        // Managed Payments is on by default for new Stripe accounts and rejects Connect fees.
+        managed_payments: { enabled: false },
         metadata: { donation_id: donation.id },
         client_reference_id: donation.id,
         customer_email: donation.donor_email || undefined,
