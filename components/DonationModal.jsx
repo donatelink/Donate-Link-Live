@@ -647,7 +647,7 @@ function StepConfirm({ ngoName, type, amount, method, ngo }) {
             {method === "stripe" && (
               <Summary
                 label="NGO receives"
-                value={`$${ngoReceives.toFixed(2)} (after $${processing.toFixed(2)} card fee)`}
+                value={`$${ngoReceives.toFixed(2)} (you pay the $${processing.toFixed(2)} card fee)`}
               />
             )}
           </>

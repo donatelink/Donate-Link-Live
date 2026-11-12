@@ -4,11 +4,11 @@ import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import Avatar from "@/components/Avatar";
 import DonationModal from "@/components/DonationModal";
-import NotificationBell from "@/components/NotificationBell";
 import Pagination, { usePaged } from "@/components/Pagination";
 import RatingModal from "@/components/RatingModal";
 import ReviewsModal from "@/components/ReviewsModal";
 import StarRating from "@/components/StarRating";
+import DashboardTopBar from "@/components/DashboardTopBar";
 import supabase from "@/utils/supabase";
 
 const STAGES = ["Pending", "Confirmed", "Allocated", "Transferred", "Completed"];
@@ -113,11 +113,6 @@ export default function DonorDashboard() {
     setDonations(data || []);
   }
 
-  async function handleSignOut() {
-    await supabase.auth.signOut();
-    router.push("/");
-  }
-
   const total = donations.reduce((sum, d) => sum + Number(d.amount), 0);
   const completed = donations.filter((d) => d.stage === 5).length;
 
@@ -168,40 +163,7 @@ export default function DonorDashboard() {
         <title>Dashboard · DonateLink</title>
       </Head>
       <div className="min-h-screen bg-zinc-50">
-        <header className="border-b border-zinc-200 bg-white">
-          <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
-            <Link href="/" className="flex items-center">
-              <img src="/donatelink-logo.png" alt="DonateLink" className="h-[46px] w-auto" />
-            </Link>
-            <div className="flex items-center gap-2 sm:gap-3">
-              <span className="hidden text-sm text-zinc-600 sm:inline">Donor</span>
-              <NotificationBell />
-              <Link
-                href="/feedback"
-                className="rounded-full border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 hover:border-zinc-400 sm:px-4 sm:text-sm"
-              >
-                Feedback
-              </Link>
-              <Link
-                href="/donor/settings"
-                aria-label="Settings"
-                title="Settings"
-                className="flex h-9 w-9 items-center justify-center rounded-full border border-zinc-300 bg-white text-zinc-700 hover:border-zinc-400"
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                </svg>
-              </Link>
-              <button
-                onClick={handleSignOut}
-                className="rounded-full border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 hover:border-zinc-400 sm:px-4 sm:text-sm"
-              >
-                Sign Out
-              </button>
-            </div>
-          </div>
-        </header>
+        <DashboardTopBar role="donor" active="dashboard" />
 
         <DonationModal
           open={!!modalNgo}

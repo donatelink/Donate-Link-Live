@@ -6,8 +6,11 @@ const inputClass =
   "mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-black focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-200";
 
 // NGO starts a fundraising campaign: a goal for one cause. It closes by itself
-// once paid donations reach the goal.
-export default function CampaignModal({ open, ngo, onClose, onSaved }) {
+// once paid donations reach the goal. Passing `campaign` opens it in edit mode;
+// `hasDonations` locks the cause (the database enforces the same rules).
+export default function CampaignModal({ open, ngo, campaign = null, hasDonations = false, onClose, onSaved }) {
+  const editing = !!campaign;
+  const goalLocked = editing && campaign.status !== "active";
   const [title, setTitle] = useState("");
   const [cause, setCause] = useState(CAUSE_NAMES[0]);
   const [goal, setGoal] = useState("");
@@ -17,13 +20,13 @@ export default function CampaignModal({ open, ngo, onClose, onSaved }) {
 
   useEffect(() => {
     if (!open) return;
-    setTitle("");
-    setCause(CAUSE_NAMES[0]);
-    setGoal("");
-    setDescription("");
+    setTitle(campaign?.title || "");
+    setCause(campaign?.cause || CAUSE_NAMES[0]);
+    setGoal(campaign ? String(Number(campaign.goal)) : "");
+    setDescription(campaign?.description || "");
     setSaving(false);
     setErrorMsg("");
-  }, [open]);
+  }, [open, campaign]);
 
   if (!open || !ngo) return null;
 
@@ -31,14 +34,25 @@ export default function CampaignModal({ open, ngo, onClose, onSaved }) {
     setErrorMsg("");
     if (!title.trim()) return setErrorMsg("Give the campaign a title.");
     if (!(Number(goal) >= 1)) return setErrorMsg("Set a goal of at least $1.");
+    if (editing && !goalLocked && Number(goal) < Number(campaign.raised)) {
+      return setErrorMsg(`The goal cannot be lower than the ${Number(campaign.raised).toFixed(2)} already raised.`);
+    }
     setSaving(true);
-    const { error } = await supabase.from("campaigns").insert({
-      ngo_id: ngo.id,
-      title: title.trim(),
-      cause,
-      goal: Number(goal),
-      description: description.trim() || null,
-    });
+    const { error } = editing
+      ? await supabase.rpc("update_campaign", {
+          p_campaign: campaign.id,
+          p_title: title.trim(),
+          p_cause: cause,
+          p_goal: Number(goal),
+          p_description: description.trim() || null,
+        })
+      : await supabase.from("campaigns").insert({
+          ngo_id: ngo.id,
+          title: title.trim(),
+          cause,
+          goal: Number(goal),
+          description: description.trim() || null,
+        });
     setSaving(false);
     if (error) return setErrorMsg(error.message);
     if (onSaved) onSaved();
@@ -56,7 +70,7 @@ export default function CampaignModal({ open, ngo, onClose, onSaved }) {
       >
         <div className="border-b border-zinc-200 px-6 py-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold text-zinc-900">New campaign</h2>
+            <h2 className="text-base font-semibold text-zinc-900">{editing ? "Edit campaign" : "New campaign"}</h2>
             <button
               onClick={onClose}
               aria-label="Close"
@@ -99,13 +113,22 @@ export default function CampaignModal({ open, ngo, onClose, onSaved }) {
               <label htmlFor="c_cause" className="block text-sm font-medium text-zinc-700">
                 Cause
               </label>
-              <select id="c_cause" value={cause} onChange={(e) => setCause(e.target.value)} className={inputClass}>
+              <select
+                id="c_cause"
+                value={cause}
+                onChange={(e) => setCause(e.target.value)}
+                disabled={editing && hasDonations}
+                className={`${inputClass} disabled:bg-zinc-100 disabled:text-zinc-500`}
+              >
                 {CAUSE_NAMES.map((c) => (
                   <option key={c} value={c}>
                     {c}
                   </option>
                 ))}
               </select>
+              {editing && hasDonations && (
+                <p className="mt-1 text-xs text-zinc-500">Locked: donors already gave for this cause.</p>
+              )}
             </div>
             <div>
               <label htmlFor="c_goal" className="block text-sm font-medium text-zinc-700">
@@ -119,8 +142,15 @@ export default function CampaignModal({ open, ngo, onClose, onSaved }) {
                 value={goal}
                 onChange={(e) => setGoal(e.target.value)}
                 placeholder="5000"
-                className={inputClass}
+                disabled={goalLocked}
+                className={`${inputClass} disabled:bg-zinc-100 disabled:text-zinc-500`}
               />
+              {editing && !goalLocked && Number(campaign.raised) > 0 && (
+                <p className="mt-1 text-xs text-zinc-500">
+                  At least ${Number(campaign.raised).toFixed(2)} (already raised).
+                </p>
+              )}
+              {goalLocked && <p className="mt-1 text-xs text-zinc-500">Locked: campaign has ended.</p>}
             </div>
           </div>
 
@@ -152,7 +182,7 @@ export default function CampaignModal({ open, ngo, onClose, onSaved }) {
             disabled={saving}
             className="rounded-lg bg-emerald-600 px-5 py-2 text-sm font-semibold text-white hover:enabled:bg-emerald-700 disabled:opacity-50"
           >
-            {saving ? "Creating..." : "Create campaign"}
+            {saving ? (editing ? "Saving..." : "Creating...") : editing ? "Save changes" : "Create campaign"}
           </button>
         </div>
       </div>

@@ -52,14 +52,15 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: `${ngo?.org_name || "This NGO"} cannot accept card donations yet` });
   }
 
-  // The donor is charged exactly the donation. The NGO pays the card processing
-  // fee: it is withheld from the transfer as the application fee, which the
-  // platform uses only to cover what Stripe charges it — DonateLink keeps nothing.
+  // The donor pays the donation plus the card processing fee. The fee is withheld
+  // from the transfer as the application fee, which the platform uses only to
+  // cover what Stripe charges it — DonateLink keeps nothing, and the NGO
+  // receives the full donation.
   const amount = Number(donation.amount);
   const { processing } = calculateFees(amount, "stripe");
-  const totalCents = Math.round(amount * 100);
+  const donationCents = Math.round(amount * 100);
   const feeCents = Math.round(processing * 100);
-  if (feeCents >= totalCents) {
+  if (donationCents < 100) {
     await failDonation(admin, donation.id);
     return res.status(400).json({ error: "Card donations must be at least $1.00" });
   }
@@ -76,10 +77,21 @@ export default async function handler(req, res) {
             quantity: 1,
             price_data: {
               currency: "usd",
-              unit_amount: totalCents,
+              unit_amount: donationCents,
               product_data: {
                 name: `Donation to ${ngo.org_name}`,
-                description: `${donation.donation_type} · card processing ($${(feeCents / 100).toFixed(2)}) is paid by the NGO`,
+                description: `${donation.donation_type} · ${ngo.org_name} receives the full amount`,
+              },
+            },
+          },
+          {
+            quantity: 1,
+            price_data: {
+              currency: "usd",
+              unit_amount: feeCents,
+              product_data: {
+                name: "Card processing fee",
+                description: "Stripe's 2.9% + $0.30. DonateLink takes no commission.",
               },
             },
           },

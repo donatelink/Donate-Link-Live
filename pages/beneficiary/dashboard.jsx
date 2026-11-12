@@ -7,8 +7,8 @@ import RatingModal from "@/components/RatingModal";
 import RequestFundingModal from "@/components/RequestFundingModal";
 import ReviewsModal from "@/components/ReviewsModal";
 import StarRating from "@/components/StarRating";
-import NotificationBell from "@/components/NotificationBell";
 import supabase from "@/utils/supabase";
+import DashboardTopBar from "@/components/DashboardTopBar";
 import Pagination, { usePaged } from "@/components/Pagination";
 
 const STATUS_LABEL = {
@@ -134,11 +134,6 @@ export default function BeneficiaryDashboard() {
     setRequests(data || []);
   }
 
-  async function handleSignOut() {
-    await supabase.auth.signOut();
-    router.push("/");
-  }
-
   const startOfMonth = new Date();
   startOfMonth.setDate(1);
   startOfMonth.setHours(0, 0, 0, 0);
@@ -195,42 +190,7 @@ export default function BeneficiaryDashboard() {
         <title>Beneficiary Dashboard · DonateLink</title>
       </Head>
       <div className="min-h-screen bg-zinc-50">
-        <header className="border-b border-zinc-200 bg-white">
-          <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
-            <Link href="/" className="flex items-center">
-              <img src="/donatelink-logo.png" alt="DonateLink" className="h-[46px] w-auto" />
-            </Link>
-            <div className="flex items-center gap-2 sm:gap-3">
-              <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 sm:px-3">
-                Beneficiary
-              </span>
-              <NotificationBell />
-              <Link
-                href="/feedback"
-                className="rounded-full border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 hover:border-zinc-400 sm:px-4 sm:text-sm"
-              >
-                Feedback
-              </Link>
-              <Link
-                href="/beneficiary/settings"
-                aria-label="Settings"
-                title="Settings"
-                className="flex h-9 w-9 items-center justify-center rounded-full border border-zinc-300 bg-white text-zinc-700 hover:border-zinc-400"
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                </svg>
-              </Link>
-              <button
-                onClick={handleSignOut}
-                className="rounded-full border border-zinc-300 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 hover:border-zinc-400 sm:px-4 sm:text-sm"
-              >
-                Sign Out
-              </button>
-            </div>
-          </div>
-        </header>
+        <DashboardTopBar role="beneficiary" active="dashboard" />
 
         <RequestFundingModal
           open={!!modalNgo}

@@ -1,8 +1,8 @@
 import Head from "next/head";
-import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import CampaignModal from "@/components/CampaignModal";
+import DashboardSidebar, { NGO_MENU } from "@/components/DashboardSidebar";
 import NotificationBell from "@/components/NotificationBell";
 import { AssignPayoutModal, assignable, openRequests, payoutTotals } from "@/components/PayoutEditor";
 import StageAdvanceModal from "@/components/StageAdvanceModal";
@@ -50,7 +50,7 @@ function money(n) {
 
 // Split progress under a row: how much of a donation went to beneficiaries, or
 // how much a beneficiary has received so far.
-function PayoutLine({ r, isBen, totals, leftToGive, onAssign }) {
+function PayoutLine({ r, isBen, totals, leftToGive, onAssign, readOnly }) {
   if (isBen) {
     const got = totals.byRequest[r.id] || 0;
     if (got <= 0) return null;
@@ -66,7 +66,7 @@ function PayoutLine({ r, isBen, totals, leftToGive, onAssign }) {
   return (
     <p className="mt-1.5 flex flex-wrap items-center gap-2 text-xs font-medium text-emerald-700">
       Given to beneficiaries: {money(given)} of {money(assignable(r))}
-      {left > 0 && (
+      {left > 0 && !readOnly && (
         <button
           onClick={() => onAssign(r)}
           className="rounded-md border border-emerald-600 px-2 py-0.5 font-semibold text-emerald-700 hover:bg-emerald-50"
@@ -93,14 +93,12 @@ function StageBadge({ stage }) {
   );
 }
 
-const MENU = [
-  { id: "donations", label: "Donations", icon: "💸" },
-  { id: "requests", label: "Beneficiary Requests", icon: "🤝" },
-  { id: "campaigns", label: "Campaigns", icon: "📣" },
-  { id: "payments", label: "Payment Methods", icon: "💳" },
-];
+const MENU = NGO_MENU;
 
-export default function NgoDashboard() {
+// adminNgoId: set only by /admin/ngo/[id]. The admin then sees that NGO's
+// dashboard read-only — every action button is hidden.
+export default function NgoDashboard({ adminNgoId = null }) {
+  const readOnly = !!adminNgoId;
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [ngo, setNgo] = useState(null);
@@ -111,17 +109,14 @@ export default function NgoDashboard() {
   const [copied, setCopied] = useState(false);
   const [advanceRec, setAdvanceRec] = useState(null);
   const [advanceKind, setAdvanceKind] = useState("donation");
-  const [view, setView] = useState("donations");
-
-  // Stripe onboarding returns to ?view=payments — open that tab directly.
-  useEffect(() => {
-    const v = router.query.view;
-    if (typeof v === "string" && MENU.some((m) => m.id === v)) setView(v);
-  }, [router.query.view]);
+  // The open tab lives in the URL (?view=payments), so a refresh — or Stripe
+  // onboarding returning to ?view=payments — reopens the same tab.
+  const view = MENU.some((m) => m.id === router.query.view) ? router.query.view : "donations";
   const [campaigns, setCampaigns] = useState([]);
   const [payouts, setPayouts] = useState([]);
   const [assignRec, setAssignRec] = useState(null);
   const [campaignOpen, setCampaignOpen] = useState(false);
+  const [editCampaign, setEditCampaign] = useState(null);
 
   useEffect(() => {
     let active = true;
@@ -141,20 +136,28 @@ export default function NgoDashboard() {
         .eq("id", session.user.id)
         .single();
 
-      if (profile?.role === "admin") {
-        router.replace("/admin/dashboard");
-        return;
-      }
-      if (profile?.role !== "ngo") {
-        router.replace("/donor/dashboard");
-        return;
+      if (readOnly) {
+        // Admin view of another NGO: only admins may open it.
+        if (profile?.role !== "admin") {
+          router.replace("/");
+          return;
+        }
+      } else {
+        if (profile?.role === "admin") {
+          router.replace("/admin/dashboard");
+          return;
+        }
+        if (profile?.role !== "ngo") {
+          router.replace("/donor/dashboard");
+          return;
+        }
       }
 
-      const { data: ngoRow, error } = await supabase
-        .from("ngos")
-        .select("*")
-        .eq("user_id", session.user.id)
-        .maybeSingle();
+      const ngoQuery = supabase.from("ngos").select("*");
+      const { data: ngoRow, error } = await (readOnly
+        ? ngoQuery.eq("id", adminNgoId)
+        : ngoQuery.eq("user_id", session.user.id)
+      ).maybeSingle();
 
       if (!active) return;
       if (error) {
@@ -197,7 +200,10 @@ export default function NgoDashboard() {
     return () => {
       active = false;
     };
-  }, [router]);
+    // Not keyed on `router`: its identity changes on every tab switch (?view=…),
+    // which would reload all data each time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readOnly, adminNgoId]);
 
   async function loadDonations() {
     if (!ngo) return;
@@ -243,11 +249,6 @@ export default function NgoDashboard() {
     loadPayouts();
   }
 
-  async function handleSignOut() {
-    await supabase.auth.signOut();
-    router.push("/");
-  }
-
   const donationLink =
     ngo?.slug && typeof window !== "undefined"
       ? `${window.location.origin}/ngo/${ngo.slug}`
@@ -276,7 +277,7 @@ export default function NgoDashboard() {
   return (
     <>
       <Head>
-        <title>NGO Dashboard · DonateLink</title>
+        <title>{readOnly ? `${ngo?.org_name || "NGO"} · Admin View` : "NGO Dashboard"} · DonateLink</title>
       </Head>
 
       <StageAdvanceModal
@@ -300,74 +301,23 @@ export default function NgoDashboard() {
 
       <CampaignModal
         open={campaignOpen}
+        campaign={editCampaign}
+        hasDonations={!!editCampaign && donations.some((d) => d.campaign_id === editCampaign.id)}
         ngo={ngo}
-        onClose={() => setCampaignOpen(false)}
+        onClose={() => {
+          setCampaignOpen(false);
+          setEditCampaign(null);
+        }}
         onSaved={loadCampaigns}
       />
 
       <div className="min-h-screen bg-zinc-50 md:flex">
-        {/* Sidebar */}
-        <aside className="border-b border-zinc-200 bg-white md:w-60 md:shrink-0 md:border-b-0 md:border-r">
-          <div className="flex items-center justify-between px-5 py-4">
-            <Link href="/" className="flex items-center">
-              <img src="/donatelink-logo.png" alt="DonateLink" className="h-[46px] w-auto" />
-            </Link>
-            <button
-              onClick={handleSignOut}
-              className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:border-zinc-400 md:hidden"
-            >
-              Sign Out
-            </button>
-          </div>
-
-          <nav className="flex gap-1 overflow-x-auto px-3 pb-3 md:flex-col md:gap-1 md:overflow-visible">
-            {MENU.map((m) => {
-              const active = view === m.id;
-              return (
-                <button
-                  key={m.id}
-                  onClick={() => setView(m.id)}
-                  className={`flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all ${
-                    active
-                      ? "bg-emerald-50 text-emerald-700 shadow-sm ring-1 ring-emerald-100"
-                      : "text-zinc-600 hover:bg-zinc-100"
-                  }`}
-                >
-                  <span>{m.icon}</span>
-                  <span>{m.label}</span>
-                  {m.id === "requests" && pendingReqCount > 0 && (
-                    <span className="ml-auto rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                      {pendingReqCount}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-            <Link
-              href="/feedback"
-              className="flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100"
-            >
-              <span>💬</span>
-              <span>Feedback</span>
-            </Link>
-            <Link
-              href="/ngo/settings"
-              className="flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100"
-            >
-              <span>⚙️</span>
-              <span>Settings</span>
-            </Link>
-          </nav>
-
-          <div className="hidden px-3 pb-4 md:block">
-            <button
-              onClick={handleSignOut}
-              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm font-semibold text-zinc-700 hover:border-zinc-400"
-            >
-              Sign Out
-            </button>
-          </div>
-        </aside>
+        <DashboardSidebar
+          role="ngo"
+          active={view}
+          badges={{ requests: pendingReqCount }}
+          viewAsNgoId={readOnly ? adminNgoId : null}
+        />
 
         {/* Main */}
         <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8 animate-page-in">
@@ -375,15 +325,31 @@ export default function NgoDashboard() {
             <div className="flex items-center gap-2">
               <span className="text-2xl">{activeMenu?.icon}</span>
               <h1 className="text-xl font-bold text-zinc-900 sm:text-2xl">{activeMenu?.label}</h1>
-              <NotificationBell className="ml-auto" />
-              <span className="rounded-full bg-emerald-100 px-4 py-1.5 text-sm font-bold uppercase tracking-wide text-emerald-700">
-                NGO
-              </span>
+              {readOnly ? (
+                <span className="ml-auto rounded-full bg-amber-100 px-4 py-1.5 text-sm font-bold uppercase tracking-wide text-amber-800">
+                  Admin View
+                </span>
+              ) : (
+                <>
+                  <NotificationBell className="ml-auto" />
+                  <span className="rounded-full bg-emerald-100 px-4 py-1.5 text-sm font-bold uppercase tracking-wide text-emerald-700">
+                    NGO
+                  </span>
+                </>
+              )}
             </div>
+
+            {readOnly && !loading && ngo && (
+              <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                👁 Viewing <strong>{ngo.org_name}</strong> as Admin — read-only. Status:{" "}
+                <strong className="capitalize">{ngo.status}</strong>. Actions are hidden.
+              </div>
+            )}
 
             {!loading && ngo && (
               <p className="mt-3 text-2xl font-bold text-zinc-700 sm:text-4xl">
-                Welcome to <span className="font-extrabold text-emerald-700">{ngo.org_name}</span>
+                {readOnly ? "" : "Welcome to "}
+                <span className="font-extrabold text-emerald-700">{ngo.org_name}</span>
               </p>
             )}
 
@@ -446,21 +412,31 @@ export default function NgoDashboard() {
                 onAssign={setAssignRec}
                 totalRaised={totalRaised}
                 completed={completed}
+                readOnly={readOnly}
               />
             )}
 
             {!loading && ngo && view === "requests" && (
-              <RequestsView ngo={ngo} requests={requests} profiles={profiles} reload={loadRequests} />
+              <RequestsView ngo={ngo} requests={requests} profiles={profiles} reload={loadRequests} readOnly={readOnly} />
             )}
 
             {!loading && ngo && view === "payments" && (
-              <PaymentMethodsView ngo={ngo} onSaved={(row) => setNgo(row)} />
+              <PaymentMethodsView ngo={ngo} onSaved={(row) => setNgo(row)} readOnly={readOnly} />
             )}
 
             {!loading && ngo && view === "campaigns" && (
               <CampaignsView
+                readOnly={readOnly}
                 campaigns={campaigns}
-                onNew={() => setCampaignOpen(true)}
+                fundedIds={new Set(donations.map((d) => d.campaign_id).filter(Boolean))}
+                onNew={() => {
+                  setEditCampaign(null);
+                  setCampaignOpen(true);
+                }}
+                onEdit={(c) => {
+                  setEditCampaign(c);
+                  setCampaignOpen(true);
+                }}
                 reload={loadCampaigns}
               />
             )}
@@ -522,6 +498,7 @@ function DonationsView({
   onAssign,
   totalRaised,
   completed,
+  readOnly,
 }) {
   // Merge donor donations with verified+/funded beneficiary requests for a single list.
   const rows = [
@@ -614,13 +591,17 @@ function DonationsView({
                       <div className="mt-2">
                         <StageBadge stage={r.stage} />
                       </div>
-                      <PayoutLine r={r} isBen={isBen} totals={totals} leftToGive={leftToGive} onAssign={onAssign} />
+                      <PayoutLine r={r} isBen={isBen} totals={totals} leftToGive={leftToGive} onAssign={onAssign} readOnly={readOnly} />
                     </div>
                     <div className="text-right">
                       <div className="font-bold text-zinc-900">${r.amount}</div>
                       {!isBen && unpaidLabel(r) ? (
                         <span className="mt-2 inline-block text-xs font-semibold text-amber-600">
                           {unpaidLabel(r)}
+                        </span>
+                      ) : r.stage < 5 && readOnly ? (
+                        <span className="mt-2 inline-block text-xs font-semibold text-zinc-500">
+                          Next: {STAGE_LABELS[r.stage]}
                         </span>
                       ) : r.stage < 5 ? (
                         <button
@@ -659,7 +640,7 @@ function DonationsView({
 }
 
 /* ---------- Beneficiary Requests view ---------- */
-function RequestsView({ requests, profiles = {}, reload }) {
+function RequestsView({ requests, profiles = {}, reload, readOnly }) {
   const reqPaged = usePaged(requests);
   const [actingId, setActingId] = useState(null);
   const [rejectId, setRejectId] = useState(null);
@@ -759,7 +740,10 @@ function RequestsView({ requests, profiles = {}, reload }) {
 
             <div className="shrink-0 text-right">
               <div className="font-bold text-zinc-900">${r.amount}</div>
-              {r.status === "pending" && (
+              {r.status === "pending" && readOnly && (
+                <p className="mt-2 text-xs font-semibold text-amber-600">Awaiting NGO review</p>
+              )}
+              {r.status === "pending" && !readOnly && (
                 <div className="mt-2 flex flex-col gap-2">
                   <button
                     onClick={() => verify(r)}
@@ -897,7 +881,7 @@ async function authHeader() {
   return { "Content-Type": "application/json", Authorization: `Bearer ${session?.access_token}` };
 }
 
-function PaymentMethodsView({ ngo, onSaved }) {
+function PaymentMethodsView({ ngo, onSaved, readOnly }) {
   const [stripeInfo, setStripeInfo] = useState({
     connected: !!ngo.stripe_account_id,
     chargesEnabled: !!ngo.stripe_charges_enabled,
@@ -920,12 +904,13 @@ function PaymentMethodsView({ ngo, onSaved }) {
   }
 
   // Re-check with Stripe on open, so finishing onboarding shows up right away.
+  // (Skipped for the admin view: the status call checks the signed-in NGO's account.)
   useEffect(() => {
-    if (!ngo.stripe_account_id) return;
+    if (!ngo.stripe_account_id || readOnly) return;
     callStripe("status")
       .then((info) => setStripeInfo(info))
       .catch((err) => setErrorMsg(err.message));
-  }, [ngo.stripe_account_id]);
+  }, [ngo.stripe_account_id, readOnly]);
 
   async function connectStripe() {
     setStripeBusy(true);
@@ -989,8 +974,8 @@ function PaymentMethodsView({ ngo, onSaved }) {
           <div>
             <h2 className="text-base font-semibold text-zinc-900">💳 Card (Stripe)</h2>
             <p className="mt-1 text-sm text-zinc-600">
-              Visa / Mastercard. Paid into your own Stripe account; Stripe&apos;s card fee (2.9% +
-              $0.30) is deducted from your share.
+              Visa / Mastercard. Paid into your own Stripe account. The donor pays Stripe&apos;s card fee
+              (2.9% + $0.30), so you receive the full donation.
             </p>
           </div>
           <span
@@ -1001,7 +986,7 @@ function PaymentMethodsView({ ngo, onSaved }) {
             {cardOn ? "✓ Accepting cards" : stripeInfo.connected ? "Setup not finished" : "Not connected"}
           </span>
         </div>
-        {!cardOn && (
+        {!cardOn && !readOnly && (
           <button
             onClick={connectStripe}
             disabled={stripeBusy}
@@ -1036,6 +1021,11 @@ function PaymentMethodsView({ ngo, onSaved }) {
         <label htmlFor="pm_wallet" className="mt-4 block text-sm font-medium text-zinc-700">
           Payout wallet address
         </label>
+        {readOnly ? (
+          <p className="mt-1 break-all rounded-lg bg-zinc-50 px-3 py-2 font-mono text-sm text-zinc-800">
+            {ngo.wallet_address || "Not set"}
+          </p>
+        ) : (
         <div className="mt-1 flex flex-wrap gap-2">
           <input
             id="pm_wallet"
@@ -1054,6 +1044,7 @@ function PaymentMethodsView({ ngo, onSaved }) {
             {walletSaving ? "Saving…" : "Save wallet"}
           </button>
         </div>
+        )}
         <p className="mt-2 text-xs text-zinc-500">
           <strong>Double-check it:</strong> crypto sent to a wrong address cannot be recovered.
           Network: Polygon Amoy (testnet).
@@ -1076,7 +1067,7 @@ const CAMPAIGN_BADGE = {
   closed: ["Closed", "bg-zinc-200 text-zinc-700"],
 };
 
-function CampaignsView({ campaigns, onNew, reload }) {
+function CampaignsView({ campaigns, fundedIds = new Set(), onNew, onEdit, reload, readOnly }) {
   const paged = usePaged(campaigns);
   const [closingId, setClosingId] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
@@ -1091,6 +1082,17 @@ function CampaignsView({ campaigns, onNew, reload }) {
     reload();
   }
 
+  // Only campaigns with no donations can be deleted (also enforced in the database).
+  async function remove(c) {
+    if (!window.confirm(`Delete "${c.title}"? This cannot be undone.`)) return;
+    setErrorMsg("");
+    setClosingId(c.id);
+    const { error } = await supabase.rpc("delete_campaign", { p_campaign: c.id });
+    setClosingId(null);
+    if (error) return setErrorMsg(error.message);
+    reload();
+  }
+
   return (
     <div className="mt-6 space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -1098,12 +1100,14 @@ function CampaignsView({ campaigns, onNew, reload }) {
           Ask donors for a set amount for one cause. A campaign closes by itself once the goal is
           raised, and its money can only be spent on that campaign.
         </p>
-        <button
-          onClick={onNew}
-          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
-        >
-          + New campaign
-        </button>
+        {!readOnly && (
+          <button
+            onClick={onNew}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+          >
+            + New campaign
+          </button>
+        )}
       </div>
 
       {errorMsg && (
@@ -1149,14 +1153,34 @@ function CampaignsView({ campaigns, onNew, reload }) {
                         of {money(c.goal)} · {c.donor_count} donor{c.donor_count === 1 ? "" : "s"}
                       </span>
                     </p>
-                    {c.status === "active" && (
-                      <button
-                        onClick={() => closeEarly(c)}
-                        disabled={closingId === c.id}
-                        className="text-xs font-semibold text-zinc-500 hover:text-red-600 disabled:opacity-50"
-                      >
-                        {closingId === c.id ? "Closing…" : "Close early"}
-                      </button>
+                    {!readOnly && (
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => onEdit(c)}
+                          disabled={closingId === c.id}
+                          className="text-xs font-semibold text-emerald-700 hover:text-emerald-900 disabled:opacity-50"
+                        >
+                          ✏️ Edit
+                        </button>
+                        {c.status === "active" && (
+                          <button
+                            onClick={() => closeEarly(c)}
+                            disabled={closingId === c.id}
+                            className="text-xs font-semibold text-zinc-500 hover:text-red-600 disabled:opacity-50"
+                          >
+                            {closingId === c.id ? "…" : "Close early"}
+                          </button>
+                        )}
+                        {!fundedIds.has(c.id) && (
+                          <button
+                            onClick={() => remove(c)}
+                            disabled={closingId === c.id}
+                            className="text-xs font-semibold text-red-600 hover:text-red-800 disabled:opacity-50"
+                          >
+                            🗑 Delete
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>

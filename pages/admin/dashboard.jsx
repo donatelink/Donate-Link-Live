@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import StageAdvanceModal from "@/components/StageAdvanceModal";
+import DashboardSidebar, { ADMIN_MENU } from "@/components/DashboardSidebar";
 import supabase from "@/utils/supabase";
 
 const STAGE_LABEL = { 1: "Pending", 2: "Confirmed", 3: "Allocated", 4: "Transferred", 5: "Completed" };
@@ -16,16 +17,7 @@ const STATUS_BADGE = {
   deleted: "bg-red-200 text-red-800",
 };
 
-const MENU = [
-  { id: "overview", label: "Overview", icon: "📊" },
-  { id: "approvals", label: "NGO Approvals", icon: "✅" },
-  { id: "donations", label: "Donations", icon: "💸" },
-  { id: "ngos", label: "NGOs", icon: "🏢" },
-  { id: "donors", label: "Donors", icon: "🧑" },
-  { id: "beneficiaries", label: "Beneficiaries", icon: "🤝" },
-  { id: "requests", label: "Beneficiary Requests", icon: "📥" },
-  { id: "feedback", label: "Feedback", icon: "💬" },
-];
+const MENU = ADMIN_MENU;
 
 const FEEDBACK_BADGE = {
   General: "bg-zinc-100 text-zinc-700",
@@ -55,7 +47,8 @@ function fmtDate(iso) {
 
 export default function AdminDashboard() {
   const router = useRouter();
-  const [view, setView] = useState("overview");
+  // The open tab lives in the URL (?view=ngos), so a refresh reopens the same tab.
+  const view = MENU.some((m) => m.id === router.query.view) ? router.query.view : "overview";
 
   const [ngos, setNgos] = useState([]);
   const [donations, setDonations] = useState([]);
@@ -183,11 +176,6 @@ export default function AdminDashboard() {
     }
   }
 
-  async function handleSignOut() {
-    await supabase.auth.signOut();
-    router.push("/");
-  }
-
   const pendingCount = ngos.filter((n) => n.status === "pending").length;
 
   // Derived: per-NGO stats
@@ -255,66 +243,11 @@ export default function AdminDashboard() {
       />
 
       <div className="min-h-screen bg-zinc-50 md:flex">
-        {/* Sidebar */}
-        <aside className="border-b border-zinc-200 bg-white md:w-60 md:shrink-0 md:border-b-0 md:border-r">
-          <div className="flex items-center justify-between px-5 py-4">
-            <Link href="/" className="flex items-center">
-              <img src="/donatelink-logo.png" alt="DonateLink" className="h-[46px] w-auto" />
-            </Link>
-            <button
-              onClick={handleSignOut}
-              className="rounded-full border border-zinc-300 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:border-zinc-400 md:hidden"
-            >
-              Sign Out
-            </button>
-          </div>
-
-          <nav className="flex gap-1 overflow-x-auto px-3 pb-3 md:flex-col md:gap-1 md:overflow-visible">
-            {MENU.map((m) => {
-              const active = view === m.id;
-              return (
-                <button
-                  key={m.id}
-                  onClick={() => setView(m.id)}
-                  className={`flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all ${
-                    active
-                      ? "bg-emerald-50 text-emerald-700 shadow-sm ring-1 ring-emerald-100"
-                      : "text-zinc-600 hover:bg-zinc-100"
-                  }`}
-                >
-                  <span>{m.icon}</span>
-                  <span>{m.label}</span>
-                  {m.id === "approvals" && pendingCount > 0 && (
-                    <span className="ml-auto rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                      {pendingCount}
-                    </span>
-                  )}
-                  {m.id === "requests" && pendingReqCount > 0 && (
-                    <span className="ml-auto rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
-                      {pendingReqCount}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-            <Link
-              href="/admin/settings"
-              className="flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100"
-            >
-              <span>⚙️</span>
-              <span>Settings</span>
-            </Link>
-          </nav>
-
-          <div className="hidden px-3 pb-4 md:block">
-            <button
-              onClick={handleSignOut}
-              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm font-semibold text-zinc-700 hover:border-zinc-400"
-            >
-              Sign Out
-            </button>
-          </div>
-        </aside>
+        <DashboardSidebar
+          role="admin"
+          active={view}
+          badges={{ approvals: pendingCount }}
+        />
 
         {/* Main */}
         <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8 animate-page-in">
@@ -813,8 +746,15 @@ function NgosView({ ngoStats, ngoLink, actingId, setStatus, softDelete }) {
             <p className="mt-2 break-all text-xs text-emerald-700">{ngoLink(n.slug)}</p>
           )}
 
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3">
+            <Link
+              href={`/admin/ngo/${n.id}`}
+              className="rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-zinc-700"
+            >
+              👁 View NGO
+            </Link>
           {(n.status === "approved" || n.status === "paused") && (
-            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3">
+            <>
               {n.status === "approved" ? (
                 <button
                   onClick={() => setStatus(n, "paused")}
@@ -844,8 +784,9 @@ function NgosView({ ngoStats, ngoLink, actingId, setStatus, softDelete }) {
                   Hidden from donors/beneficiaries until resumed.
                 </span>
               )}
-            </div>
+            </>
           )}
+          </div>
           {n.status === "deleted" && (
             <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3">
               <button

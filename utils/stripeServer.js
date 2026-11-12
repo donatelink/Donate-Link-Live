@@ -3,7 +3,6 @@
 // role key, neither of which may reach the browser.
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
-import { calculateFees } from "@/components/FeeBreakdown";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -55,10 +54,14 @@ export async function applyCheckoutSession(admin, session) {
       typeof session.payment_intent === "string"
         ? session.payment_intent
         : session.payment_intent?.id || null;
-    // The donor is charged exactly the donation; the NGO's share is that minus
-    // the card fee. net_amount is what enters the NGO's cause pool.
-    const charged = (session.amount_total || 0) / 100;
-    const { ngoReceives } = calculateFees(charged, "stripe");
+    // The donor paid the donation plus the card fee, so the NGO receives the
+    // full donation. net_amount is what the NGO can pass on to beneficiaries.
+    const { data: donation } = await admin
+      .from("donations")
+      .select("amount")
+      .eq("id", donationId)
+      .maybeSingle();
+    const ngoReceives = Number(donation?.amount ?? 0);
     const { error } = await admin
       .from("donations")
       .update({

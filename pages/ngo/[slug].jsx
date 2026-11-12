@@ -20,6 +20,8 @@ export default function NgoPage() {
   const [loading, setLoading] = useState(true);
   const [signedIn, setSignedIn] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [campaigns, setCampaigns] = useState([]);
+  const [modalCampaign, setModalCampaign] = useState(null);
 
   useEffect(() => {
     if (!slug) return;
@@ -40,12 +42,23 @@ export default function NgoPage() {
       setSignedIn(!!sessionRes.data.session);
 
       if (ngoRes.data?.id) {
-        const { data: rData } = await supabase
-          .from("ngo_ratings")
-          .select("*")
-          .eq("ngo_id", ngoRes.data.id)
-          .order("created_at", { ascending: false });
-        if (active) setRatings(rData || []);
+        const [{ data: rData }, { data: cData }] = await Promise.all([
+          supabase
+            .from("ngo_ratings")
+            .select("*")
+            .eq("ngo_id", ngoRes.data.id)
+            .order("created_at", { ascending: false }),
+          supabase
+            .from("campaigns")
+            .select("*")
+            .eq("ngo_id", ngoRes.data.id)
+            .eq("status", "active")
+            .order("created_at", { ascending: false }),
+        ]);
+        if (active) {
+          setRatings(rData || []);
+          setCampaigns(cData || []);
+        }
       }
       setLoading(false);
     })();
@@ -59,9 +72,10 @@ export default function NgoPage() {
     ? ratings.reduce((s, r) => s + r.stars, 0) / ratingCount
     : 0;
 
-  function handleDonate() {
-    if (signedIn) setModalOpen(true);
-    else router.push("/auth/login");
+  function handleDonate(campaign = null) {
+    if (!signedIn) return router.push("/auth/login");
+    setModalCampaign(campaign);
+    setModalOpen(true);
   }
 
   return (
@@ -81,7 +95,11 @@ export default function NgoPage() {
         <DonationModal
           open={modalOpen}
           ngo={ngo}
-          onClose={() => setModalOpen(false)}
+          campaign={modalCampaign}
+          onClose={() => {
+            setModalOpen(false);
+            setModalCampaign(null);
+          }}
         />
 
         <main className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
@@ -155,7 +173,7 @@ export default function NgoPage() {
                 </dl>
 
                 <button
-                  onClick={handleDonate}
+                  onClick={() => handleDonate()}
                   className="mt-6 block w-full rounded-lg bg-emerald-600 px-4 py-3 text-center text-sm font-semibold text-white hover:bg-emerald-700"
                 >
                   {signedIn ? `Donate to ${ngo.org_name}` : "Sign in to donate"}
@@ -165,6 +183,46 @@ export default function NgoPage() {
               <p className="mt-4 text-center text-xs text-zinc-400">
                 Every donation to this NGO is tracked transparently through 5 stages.
               </p>
+
+              {campaigns.length > 0 && (
+                <div className="mt-6">
+                  <h2 className="text-base font-semibold text-zinc-900">Active campaigns</h2>
+                  <p className="text-sm text-zinc-600">
+                    Give toward a set goal. A campaign closes by itself once its goal is reached.
+                  </p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    {campaigns.map((c) => {
+                      const pct = Math.min(100, (Number(c.raised) / Number(c.goal)) * 100);
+                      return (
+                        <div key={c.id} className="flex flex-col rounded-2xl border border-zinc-200 bg-white p-4">
+                          <h3 className="font-semibold text-zinc-900">{c.title}</h3>
+                          <p className="text-xs text-zinc-500">{c.cause}</p>
+                          {c.description && (
+                            <p className="mt-2 flex-1 text-sm text-zinc-600 line-clamp-3">{c.description}</p>
+                          )}
+                          <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-100">
+                            <div className="h-full rounded-full bg-emerald-500" style={{ width: `${pct}%` }} />
+                          </div>
+                          <p className="mt-2 text-sm">
+                            <span className="font-bold text-emerald-600">${Number(c.raised).toFixed(2)}</span>
+                            <span className="text-zinc-500">
+                              {" "}
+                              of ${Number(c.goal).toFixed(2)} · {c.donor_count} donor
+                              {c.donor_count === 1 ? "" : "s"}
+                            </span>
+                          </p>
+                          <button
+                            onClick={() => handleDonate(c)}
+                            className="mt-3 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                          >
+                            {signedIn ? "Donate to this campaign" : "Sign in to donate"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {ratings.length > 0 && (
                 <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-6 sm:p-8">

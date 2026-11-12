@@ -17,15 +17,18 @@ export function usdToPol(usd) {
   return usd / POL_USD_RATE;
 }
 
-// The donor pays exactly the donation amount. Any card processing fee is
-// deducted from what the NGO receives, never added on top for the donor.
+// The donor pays the card processing fee on top of the donation, so the NGO
+// receives the full donation. Stripe takes its fee from the whole charge, so the
+// total is grossed up: total = (donation + flat) / (1 - percent), rounded up to
+// the cent so the fee always covers what Stripe takes.
 export function calculateFees(amount, method) {
   const f = PAYMENT_FEES[method];
-  const processing = Math.round((amount * f.percent + f.flat) * 100) / 100;
+  const total = f.percent || f.flat ? Math.ceil(((amount + f.flat) / (1 - f.percent)) * 100) / 100 : amount;
+  const processing = Math.round((total - amount) * 100) / 100;
   return {
     processing,
-    total: amount,
-    ngoReceives: Math.max(0, Math.round((amount - processing) * 100) / 100),
+    total,
+    ngoReceives: amount,
     network: f.network,
     label: f.label,
     onchain: f.onchain,
@@ -63,15 +66,16 @@ export default function FeeBreakdown({ amount, method }) {
           </>
         ) : (
           <>
-            <Row label="You pay" value={`$${total.toFixed(2)}`} bold />
             <Row
-              label={`Processing (${label}), paid by NGO`}
-              value={`−$${processing.toFixed(2)}`}
+              label={`Card fee (${label}), paid by you`}
+              value={`+${processing.toFixed(2)}`}
               muted
             />
+            <Row label="Platform fee" value="$0.00" muted />
             <Row label="Settlement" value={network} muted />
             <div className="border-t border-emerald-200 pt-2">
-              <Row label="NGO receives" value={`$${ngoReceives.toFixed(2)}`} bold />
+              <Row label="You pay" value={`${total.toFixed(2)}`} bold />
+              <Row label="NGO receives" value={`${ngoReceives.toFixed(2)} (100%)`} bold />
             </div>
           </>
         )}
@@ -91,8 +95,8 @@ export default function FeeBreakdown({ amount, method }) {
       ) : (
         <p className="mt-3 text-xs text-emerald-700">
           All fees disclosed upfront per Shariah Ujrah principle. No hidden charges, no Riba. You pay
-          only your donation; Stripe&apos;s card fee is deducted from the NGO&apos;s share, and
-          DonateLink takes no commission.
+          your donation plus Stripe&apos;s card fee (2.9% + $0.30), so the NGO receives 100% of
+          your donation, and DonateLink takes no commission.
         </p>
       )}
     </div>
